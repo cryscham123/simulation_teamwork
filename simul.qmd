@@ -169,6 +169,8 @@ class Job:
             # setup 중 qtime 초과시 setup은 마저 진행하는 로직 필요
 ```
 
+새로운 기능! 얍!
+
 ```{python}
 env = simpy.Environment()
 scheduler = Scheduler(env, 
