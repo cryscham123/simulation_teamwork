@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 import pandas as pd
-
+#변경내용 테스트---
 #유전알고리즘 파라미터
 POP_SIZE = 200 #세대당 해 
 GENERATIONS = 200 #세대 수(n세대까지 반복)
