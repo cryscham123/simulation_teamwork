@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 from .scheduler import Scheduler
 from .machine import Machine
 
-print('카푸치노')
+print('카푸치노1234')
 class Job:
     def __init__(self, env: simpy.Environment, job_info: Dict[str, Any],
                  op_info: pd.DataFrame, scheduler: Scheduler):
