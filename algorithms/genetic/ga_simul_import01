@@ -1,0 +1,523 @@
+import os
+import random
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+import simpy
+
+# simulation 패키지에서 필요한 클래스만 import
+from simulation import DataLoader, Scheduler, Job
+
+
+# =========================
+# 유전알고리즘 파라미터
+# =========================
+POP_SIZE = 200
+GENERATIONS = 200
+TOURNAMENT_K = 5
+CROSSOVER_RATE = 0.9
+MUTATION_RATE_SEQ = 0.20
+MUTATION_RATE_MAC = 0.45
+ELITE_SIZE = 3
+RANDOM_SEED = 42
+
+# 목적함수 가중치
+W_MAKESPAN = 1.0
+W_QTIME = 1000.0
+W_NOT_FINISHED = 100000.0
+W_DISCARDED = 50000.0
+
+SIM_TIME_LIMIT = 10**7
+
+
+@dataclass
+class Individual:
+    # 염색체 1개 = 스케줄 후보 1개
+    seq_gene: List[Any]
+    machine_gene: Dict[Any, Any]
+    fitness: float = float("inf")
+    decoded: Optional[dict] = None
+
+
+class GAScheduler:
+    """
+    GA + SimPy 연결용 메인 클래스
+
+    전제:
+    1) simulation.scheduler.Scheduler 가 아래 인자를 추가로 받을 수 있어야 함
+       - dispatch_priority
+       - preferred_machine
+       - monitor
+
+    2) simulation.job.Job 이 아래 인자를 추가로 받을 수 있어야 함
+       - monitor
+
+    3) Job 객체가 실행 후 아래 상태값을 외부에서 읽을 수 있어야 함
+       - completed
+       - discarded
+       - discard_reason
+       - completed_op_count
+       - last_op_end_time
+       - qtime_violation_count
+       - qtime_violation_total
+    """
+
+    def __init__(
+        self,
+        base_data_path: str = "schema",
+        qtime_path: Optional[str] = "schema/qtime_constraints.csv",
+    ):
+        random.seed(RANDOM_SEED)
+
+        self.base_data_path = base_data_path
+
+        # 기존 DataLoader 재사용
+        loader = DataLoader(base_data_path=base_data_path)
+        data = loader.load_all_data()
+
+        self.jobs = data["jobs"].copy()
+        self.machines = data["machines"].copy()
+        self.operations = data["operations"].copy()
+        self.op_machine_map = data["operation_machine_map"].copy()
+        self.setup = data["setup_times"].copy()
+
+        # machine_failure.csv가 없을 수도 있으므로 안전하게 처리
+        if "machine_failure" in data:
+            self.machine_failure = data["machine_failure"].copy()
+        else:
+            self.machine_failure = pd.DataFrame({
+                "machine_id": self.machines["machine_id"],
+                "base_hazard": 0.0,
+                "hazard_increase_rate": 0.0,
+                "repair_time": 0.0,
+                "pm_duration": 0.0,
+            })
+
+        self.qtime_df = None
+        if qtime_path is not None and os.path.exists(qtime_path):
+            self.qtime_df = pd.read_csv(qtime_path)
+
+        self._build_lookup()
+        self._inject_qtime_to_operations()
+
+    def _build_lookup(self):
+        self.job_ids = self.jobs["job_id"].tolist()
+        self.job_info = self.jobs.set_index("job_id").to_dict("index")
+
+        self.job_type_of = {
+            row["job_id"]: row["job_type"]
+            for _, row in self.jobs.iterrows()
+        }
+        self.release_of = {
+            row["job_id"]: float(row["release_time"])
+            for _, row in self.jobs.iterrows()
+        }
+        self.due_of = {
+            row["job_id"]: float(row["due_date"])
+            for _, row in self.jobs.iterrows()
+        }
+        self.priority_of = {
+            row["job_id"]: float(row["priority"])
+            for _, row in self.jobs.iterrows()
+        }
+
+        self.operations = self.operations.sort_values(
+            ["job_id", "op_seq"]
+        ).reset_index(drop=True)
+
+        self.ops_by_job: Dict[Any, List[dict]] = {}
+        self.op_seq_of: Dict[Any, int] = {}
+        self.op_group_of: Dict[Any, Any] = {}
+        self.op_job_of: Dict[Any, Any] = {}
+        self.op_id_by_job_seq: Dict[Tuple[Any, int], Any] = {}
+
+        for _, row in self.operations.iterrows():
+            row_dict = row.to_dict()
+            self.ops_by_job.setdefault(row["job_id"], []).append(row_dict)
+            self.op_seq_of[row["op_id"]] = int(row["op_seq"])
+            self.op_group_of[row["op_id"]] = row["op_group"]
+            self.op_job_of[row["op_id"]] = row["job_id"]
+            self.op_id_by_job_seq[(row["job_id"], int(row["op_seq"]))] = row["op_id"]
+
+        self.total_num_ops = len(self.operations)
+        self.num_ops_per_job = {
+            job_id: len(rows)
+            for job_id, rows in self.ops_by_job.items()
+        }
+
+        self.machine_ids = self.machines["machine_id"].tolist()
+        self.machine_group_of = {
+            row["machine_id"]: row["machine_group"]
+            for _, row in self.machines.iterrows()
+        }
+
+        self.feasible_machines: Dict[Any, List[Any]] = {}
+        self.proc_time: Dict[Tuple[Any, Any], float] = {}
+
+        for _, row in self.op_machine_map.iterrows():
+            op_id = row["op_id"]
+            machine_id = row["machine_id"]
+            process_time = float(row["process_time"])
+
+            self.feasible_machines.setdefault(op_id, []).append(machine_id)
+            self.proc_time[(op_id, machine_id)] = process_time
+
+    def _inject_qtime_to_operations(self):
+        if "qtime" not in self.operations.columns:
+            self.operations["qtime"] = pd.NA
+
+        if self.qtime_df is None:
+            return
+
+        required_cols = {"job_id", "from_op_seq", "to_op_seq", "max_qtime"}
+        if required_cols.issubset(self.qtime_df.columns):
+            for _, row in self.qtime_df.iterrows():
+                job_id = row["job_id"]
+                to_op_seq = int(row["to_op_seq"])
+                max_qtime = row["max_qtime"]
+
+                mask = (
+                    (self.operations["job_id"] == job_id) &
+                    (self.operations["op_seq"] == to_op_seq)
+                )
+                self.operations.loc[mask, "qtime"] = max_qtime
+
+        self.operations = self.operations.sort_values(
+            ["job_id", "op_seq"]
+        ).reset_index(drop=True)
+
+        self.ops_by_job = {}
+        for _, row in self.operations.iterrows():
+            self.ops_by_job.setdefault(row["job_id"], []).append(row.to_dict())
+
+    def create_random_individual(self) -> Individual:
+        seq_gene = []
+        for job_id in self.job_ids:
+            seq_gene.extend([job_id] * self.num_ops_per_job[job_id])
+        random.shuffle(seq_gene)
+
+        machine_gene = {}
+        for op_id in self.operations["op_id"].tolist():
+            machine_gene[op_id] = random.choice(self.feasible_machines[op_id])
+
+        ind = Individual(seq_gene=seq_gene, machine_gene=machine_gene)
+        self.evaluate(ind)
+        return ind
+
+    def decode(self, ind: Individual) -> dict:
+        """
+        염색체를 SimPy 실행용 계획으로 변환
+        - seq_gene -> dispatch_priority
+        - machine_gene -> preferred_machine
+        """
+        next_op_index = {job_id: 0 for job_id in self.job_ids}
+        dispatch_priority: Dict[Tuple[Any, int], int] = {}
+        preferred_machine: Dict[Tuple[Any, int], Any] = {}
+        decoded_rows = []
+
+        rank = 0
+        for job_id in ind.seq_gene:
+            current_index = next_op_index[job_id]
+
+            if current_index >= self.num_ops_per_job[job_id]:
+                continue
+
+            op = self.ops_by_job[job_id][current_index]
+            op_id = op["op_id"]
+            op_seq = int(op["op_seq"])
+            machine_id = ind.machine_gene[op_id]
+
+            if machine_id not in self.feasible_machines[op_id]:
+                machine_id = random.choice(self.feasible_machines[op_id])
+                ind.machine_gene[op_id] = machine_id
+
+            dispatch_priority[(job_id, op_seq)] = rank
+            preferred_machine[(job_id, op_seq)] = machine_id
+
+            decoded_rows.append({
+                "dispatch_rank": rank,
+                "job_id": job_id,
+                "op_id": op_id,
+                "op_seq": op_seq,
+                "preferred_machine": machine_id,
+                "op_group": self.op_group_of[op_id],
+            })
+
+            next_op_index[job_id] += 1
+            rank += 1
+
+        return {
+            "dispatch_df": pd.DataFrame(decoded_rows)
+                .sort_values("dispatch_rank")
+                .reset_index(drop=True),
+            "dispatch_priority": dispatch_priority,
+            "preferred_machine": preferred_machine,
+        }
+
+    def run_simulation(self, ind: Individual) -> dict:
+        decoded = self.decode(ind)
+        env = simpy.Environment()
+
+        # monitor는 상대 코드가 추후 기록 기능을 지원한다고 가정
+        monitor = {
+            "event_log": [],
+            "schedule_log": [],
+            "job_log": [],
+        }
+
+        # 핵심:
+        # 수정된 Scheduler가 GA 정보를 직접 받는다고 가정
+        scheduler = Scheduler(
+            env=env,
+            machine_df=self.machines,
+            operations_df=self.operations,
+            machine_failure_df=self.machine_failure,
+            setup_times_df=self.setup,
+            op_machine_df=self.op_machine_map,
+            dispatch_priority=decoded["dispatch_priority"],
+            preferred_machine=decoded["preferred_machine"],
+            monitor=monitor,
+        )
+
+        sim_jobs: List[Job] = []
+        for _, job_row in self.jobs.iterrows():
+            job_id = job_row["job_id"]
+            job_ops = self.operations[self.operations["job_id"] == job_id].copy()
+
+            # 수정된 Job이 monitor를 받을 수 있다고 가정
+            sim_job = Job(
+                env=env,
+                job_info=job_row.to_dict(),
+                op_info=job_ops,
+                scheduler=scheduler,
+                monitor=monitor,
+            )
+            sim_jobs.append(sim_job)
+
+        env.run(until=SIM_TIME_LIMIT)
+
+        job_summary_rows = []
+        completed_end_times = []
+        qtime_violation_total = 0.0
+        qtime_violation_count = 0
+        discarded_count = 0
+        unfinished_count = 0
+
+        for sim_job in sim_jobs:
+            if getattr(sim_job, "completed", False) and getattr(sim_job, "last_op_end_time", None) is not None:
+                completed_end_times.append(sim_job.last_op_end_time)
+
+            if getattr(sim_job, "discarded", False):
+                discarded_count += 1
+
+            if (not getattr(sim_job, "completed", False)) and (not getattr(sim_job, "discarded", False)):
+                unfinished_count += 1
+
+            qtime_violation_total += getattr(sim_job, "qtime_violation_total", 0.0)
+            qtime_violation_count += getattr(sim_job, "qtime_violation_count", 0)
+
+            job_summary_rows.append({
+                "job_id": getattr(sim_job, "job_id", None),
+                "completed": getattr(sim_job, "completed", False),
+                "discarded": getattr(sim_job, "discarded", False),
+                "discard_reason": getattr(sim_job, "discard_reason", None),
+                "completed_op_count": getattr(sim_job, "completed_op_count", 0),
+                "total_op_count": len(self.ops_by_job[getattr(sim_job, "job_id")]),
+                "last_op_end_time": getattr(sim_job, "last_op_end_time", None),
+                "qtime_violation_count": getattr(sim_job, "qtime_violation_count", 0),
+                "qtime_violation_total": getattr(sim_job, "qtime_violation_total", 0.0),
+            })
+
+        schedule_df = pd.DataFrame(monitor["schedule_log"])
+        event_df = pd.DataFrame(monitor["event_log"])
+        job_summary_df = pd.DataFrame(job_summary_rows)
+
+        makespan = max(completed_end_times) if completed_end_times else float(SIM_TIME_LIMIT)
+
+        return {
+            "dispatch_df": decoded["dispatch_df"],
+            "schedule_df": schedule_df,
+            "event_df": event_df,
+            "job_summary_df": job_summary_df,
+            "makespan": makespan,
+            "total_qtime_violation": qtime_violation_total,
+            "qtime_violation_count": qtime_violation_count,
+            "discarded_count": discarded_count,
+            "unfinished_count": unfinished_count,
+        }
+
+    def evaluate(self, ind: Individual) -> float:
+        simulated = self.run_simulation(ind)
+
+        fitness = (
+            W_MAKESPAN * simulated["makespan"]
+            + W_QTIME * simulated["total_qtime_violation"]
+            + W_NOT_FINISHED * simulated["unfinished_count"]
+            + W_DISCARDED * simulated["discarded_count"]
+        )
+
+        ind.fitness = fitness
+        ind.decoded = simulated
+        return fitness
+
+    def tournament_selection(self, population: List[Individual]) -> Individual:
+        sampled = random.sample(population, TOURNAMENT_K)
+        sampled.sort(key=lambda x: x.fitness)
+        return sampled[0]
+
+    def crossover_sequence(self, p1: List[Any], p2: List[Any]) -> List[Any]:
+        size = len(p1)
+        mask = [random.randint(0, 1) for _ in range(size)]
+        child = [None] * size
+
+        required_counts = {
+            job_id: self.num_ops_per_job[job_id]
+            for job_id in self.job_ids
+        }
+        used_counts = {job_id: 0 for job_id in self.job_ids}
+
+        for i in range(size):
+            if mask[i] == 1:
+                job_id = p1[i]
+                if used_counts[job_id] < required_counts[job_id]:
+                    child[i] = job_id
+                    used_counts[job_id] += 1
+
+        p2_fill = []
+        temp_counts = used_counts.copy()
+
+        for job_id in p2:
+            if temp_counts[job_id] < required_counts[job_id]:
+                p2_fill.append(job_id)
+                temp_counts[job_id] += 1
+
+        fill_idx = 0
+        for i in range(size):
+            if child[i] is None:
+                child[i] = p2_fill[fill_idx]
+                fill_idx += 1
+
+        return child
+
+    def crossover_machine_gene(self, g1: Dict[Any, Any], g2: Dict[Any, Any]) -> Dict[Any, Any]:
+        child = {}
+        for op_id in g1.keys():
+            chosen = g1[op_id] if random.random() < 0.5 else g2[op_id]
+            if chosen not in self.feasible_machines[op_id]:
+                chosen = random.choice(self.feasible_machines[op_id])
+            child[op_id] = chosen
+        return child
+
+    def crossover(self, p1: Individual, p2: Individual) -> Tuple[Individual, Individual]:
+        if random.random() > CROSSOVER_RATE:
+            c1 = Individual(
+                seq_gene=p1.seq_gene[:],
+                machine_gene=p1.machine_gene.copy()
+            )
+            c2 = Individual(
+                seq_gene=p2.seq_gene[:],
+                machine_gene=p2.machine_gene.copy()
+            )
+            return c1, c2
+
+        c1_seq = self.crossover_sequence(p1.seq_gene, p2.seq_gene)
+        c2_seq = self.crossover_sequence(p2.seq_gene, p1.seq_gene)
+        c1_mac = self.crossover_machine_gene(p1.machine_gene, p2.machine_gene)
+        c2_mac = self.crossover_machine_gene(p2.machine_gene, p1.machine_gene)
+
+        return Individual(c1_seq, c1_mac), Individual(c2_seq, c2_mac)
+
+    def mutate(self, ind: Individual):
+        if random.random() < MUTATION_RATE_SEQ:
+            i, j = random.sample(range(len(ind.seq_gene)), 2)
+            ind.seq_gene[i], ind.seq_gene[j] = ind.seq_gene[j], ind.seq_gene[i]
+
+        if random.random() < MUTATION_RATE_MAC:
+            num_changes = random.randint(1, max(1, self.total_num_ops // 10))
+            op_ids = random.sample(self.operations["op_id"].tolist(), num_changes)
+            for op_id in op_ids:
+                ind.machine_gene[op_id] = random.choice(self.feasible_machines[op_id])
+
+    def run(self):
+        population = [self.create_random_individual() for _ in range(POP_SIZE)]
+        history = []
+
+        best = min(population, key=lambda x: x.fitness)
+
+        for gen in range(GENERATIONS):
+            population.sort(key=lambda x: x.fitness)
+            new_population = population[:ELITE_SIZE]
+
+            while len(new_population) < POP_SIZE:
+                p1 = self.tournament_selection(population)
+                p2 = self.tournament_selection(population)
+
+                c1, c2 = self.crossover(p1, p2)
+                self.mutate(c1)
+                self.mutate(c2)
+                self.evaluate(c1)
+                self.evaluate(c2)
+
+                new_population.append(c1)
+                if len(new_population) < POP_SIZE:
+                    new_population.append(c2)
+
+            population = new_population
+            current_best = min(population, key=lambda x: x.fitness)
+
+            if current_best.fitness < best.fitness:
+                best = current_best
+
+            history.append({
+                "generation": gen + 1,
+                "best_fitness": best.fitness,
+                "current_best_fitness": current_best.fitness,
+                "best_makespan": best.decoded["makespan"],
+                "best_total_qtime_violation": best.decoded["total_qtime_violation"],
+                "best_qtime_violation_count": best.decoded["qtime_violation_count"],
+                "best_discarded_count": best.decoded["discarded_count"],
+                "best_unfinished_count": best.decoded["unfinished_count"],
+            })
+
+            if (gen + 1) % 10 == 0:
+                print(
+                    f"Gen {gen + 1:3d} | "
+                    f"Best Fitness={best.fitness:.2f} | "
+                    f"Makespan={best.decoded['makespan']:.2f} | "
+                    f"Q-viol={best.decoded['total_qtime_violation']:.2f} | "
+                    f"Discarded={best.decoded['discarded_count']} | "
+                    f"Unfinished={best.decoded['unfinished_count']}"
+                )
+
+        history_df = pd.DataFrame(history)
+        return best, history_df
+
+
+def main():
+    runner = GAScheduler(
+        base_data_path="schema",
+        qtime_path="schema/qtime_constraints.csv",
+    )
+
+    best, history_df = runner.run()
+
+    if best.decoded is not None:
+        best.decoded["dispatch_df"].to_csv("best_dispatch_plan.csv", index=False)
+        best.decoded["schedule_df"].to_csv("best_simulation_schedule.csv", index=False)
+        best.decoded["event_df"].to_csv("best_simulation_event_log.csv", index=False)
+        best.decoded["job_summary_df"].to_csv("best_job_summary.csv", index=False)
+
+    history_df.to_csv("ga_history.csv", index=False)
+
+    print("\n========== FINAL RESULT ==========")
+    print(f"Best fitness                : {best.fitness:.2f}")
+    print(f"Makespan                    : {best.decoded['makespan']:.2f}")
+    print(f"Total qtime violation       : {best.decoded['total_qtime_violation']:.2f}")
+    print(f"Qtime violation count       : {best.decoded['qtime_violation_count']}")
+    print(f"Discarded jobs              : {best.decoded['discarded_count']}")
+    print(f"Unfinished jobs             : {best.decoded['unfinished_count']}")
+
+
+if __name__ == "__main__":
+    main()
