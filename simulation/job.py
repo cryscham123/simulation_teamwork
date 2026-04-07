@@ -31,7 +31,24 @@ class Job:
         self.__job_process = env.process(self.run())
         self.__sub_process: Optional[simpy.Process] = None
         self.__cur_machine: Optional[Machine] = None
-        self.__current_stage: Optional[str] = None  # 'setup' 또는 'work' 구분용
+
+        # 이벤트 로그
+        self.__event_log = []
+
+    @property
+    def event_log(self):
+        return self.__event_log
+
+    def log_event(self, event_type: str, op_id: Optional[int] = None, machine_id: Optional[int] = None, reason: Optional[str] = None):
+        self.__event_log.append({
+            'job_id': self.__id,
+            'event_type': event_type,
+            'description': f"Job {self.__id} - {event_type}" 
+                + (f" on Machine {machine_id}" if machine_id is not None else "")
+                + (f" for Operation {op_id}" if op_id is not None else "")
+                + (f" due to {reason}" if reason is not None else ""),
+            'time': self.__env.now
+        })
 
     def __chk_qtime(self, seq: int):
         """
@@ -48,6 +65,18 @@ class Job:
         except simpy.Interrupt:
             pass
 
+    def __interrupt_qtime(self, qtime_process: simpy.Process):
+        """
+        QTime 체크 프로세스 중단
+        """
+        try:
+            if qtime_process.is_alive:
+                qtime_process.interrupt()
+        except (RuntimeError, AttributeError):
+            # 프로세스가 이미 종료되었거나 interrupt할 수 없는 상태
+            pass
+
+
     def run(self):
         """작업 실행 메인 프로세스"""
         # release time만큼 기다려준다.
@@ -55,87 +84,59 @@ class Job:
 
         try:
             for op_id, seq in self.__op_seq:
-                # qtime 타이머를 켜고 프로세스 시작
-                qtime_process = self.__env.process(self.__chk_qtime(seq))
-
-                # Operation 처리 (machine breakdown으로 인한 interrupt 처리)
-                operation_completed = False
-                while not operation_completed:
+                while True:
+                    is_in_work = False
+                    # qtime 타이머를 켜고 프로세스 시작
+                    qtime_process = self.__env.process(self.__chk_qtime(seq))
                     # 가용 가능한 machine 선택
-                    print(f'{round(self.__env.now, 2)}\tJob {self.__id} is waiting for machine for operation {op_id}')
+                    self.log_event(event_type='waiting', op_id=op_id)
                     self.__cur_machine = yield self.__env.process(
                         self.__scheduler.get_matched_machine(self.__id, seq)
                     )
+                    # machine이 할당되고, setup 단계 전까지 가면 qtime check 종료.
+                    self.__interrupt_qtime(qtime_process)
                     try:
-                        # machine이 할당되고, setup 단계 전까지 가면 qtime check 종료.
-                        # qtime_process가 이미 종료되었을 수 있으므로 try-except로 처리
-                        try:
-                            if qtime_process.is_alive:
-                                qtime_process.interrupt()
-                        except (RuntimeError, AttributeError):
-                            # 프로세스가 이미 종료되었거나 interrupt할 수 없는 상태
-                            pass
                         # machine의 resource를 점유한 상태로 로직 시작
-                        with self.__cur_machine.resource.request(
-                            priority=self.__priority, preempt=False
-                        ) as req:
+                        with self.__cur_machine.resource.request(priority=self.__priority, preempt=False) as req:
                             yield req
 
                             # Setup 단계
-                            print(f'{round(self.__env.now, 2)}\t'
-                                  f'Job {self.__id} starts setup for operation {op_id} '
-                                  f'on machine {self.__cur_machine.id}')
-                            self.__current_stage = 'setup'
+                            self.log_event(event_type='setup', op_id=op_id, machine_id=self.__cur_machine.id)
                             self.__sub_process = self.__env.process(
                                 self.__cur_machine.setup(self.__type)
                             )
                             yield self.__sub_process
 
                             # Work 단계
-                            print(f'{round(self.__env.now, 2)}\t'
-                                  f'Job {self.__id} starts processing operation {op_id} '
-                                  f'on machine {self.__cur_machine.id}')
-                            self.__current_stage = 'work'
+                            is_in_work = True
+                            self.log_event(event_type='working', op_id=op_id, machine_id=self.__cur_machine.id)
                             self.__sub_process = self.__env.process(
                                 self.__cur_machine.work(op_id)
                             )
                             yield self.__sub_process
-
-                            print(f'{round(self.__env.now, 2)}\t'
-                                  f'Job {self.__id} finished operation {op_id} '
-                                  f'on machine {self.__cur_machine.id}')
-                            operation_completed = True
+                            is_in_work = False
+                            break
 
                     except simpy.Interrupt:
                         # Machine breakdown으로 인한 interrupt
-                        if self.__current_stage == 'setup':
-                            # Setup 중 고장: 재시도
-                            print(f'{round(self.__env.now, 2)}\t'
-                                  f'Job {self.__id} interrupted during setup '
-                                  f'on machine {self.__cur_machine.id}, '
-                                  f'will retry operation {op_id}')
-                            # 고장난 Machine을 반환하고 다시 대기
-                            self.__sub_process = None
-                            self.__scheduler.put_back_machine(self.__cur_machine)
-                        elif self.__current_stage == 'work':
-                            # Work 중 고장: job 폐기
-                            print(f'{round(self.__env.now, 2)}\t'
-                                  f'Job {self.__id} interrupted during work '
-                                  f'on machine {self.__cur_machine.id}, job discarded')
-                            # 고장난 Machine을 반환하고 종료
-                            self.__sub_process = None
-                            self.__scheduler.put_back_machine(self.__cur_machine)
+                        self.log_event(event_type='interrupt', op_id=op_id, machine_id=self.__cur_machine.id, reason='machine breakdown')
+                        self.__sub_process = None
+                        self.__scheduler.put_back_machine(self.__cur_machine)
+                        # 작업 중 고장이 발생하면 폐기
+                        if is_in_work:
+                            self.log_event(event_type='completed')
                             return 
 
                 self.__scheduler.put_back_machine(self.__cur_machine)
                 self.__cur_machine = None
                 self.__sub_process = None
-                self.__current_stage = None
+            else:
+                self.log_event(event_type='completed')
 
         except simpy.Interrupt:
             # Qtime 초과로 인한 job discard
-            print(f'{round(self.__env.now, 2)}\t'
-                  f'Job {self.__id} discarded due to qtime violation')
+            self.log_event(event_type='interrupt', reason='qtime exceeded')
+            self.log_event(event_type='completed')
             if self.__sub_process:
                 self.__sub_process.interrupt()
             if self.__cur_machine:
