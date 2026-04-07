@@ -61,11 +61,12 @@ class Job:
                 # Operation 처리 (machine breakdown으로 인한 interrupt 처리)
                 operation_completed = False
                 while not operation_completed:
+                    # 가용 가능한 machine 선택
+                    print(f'{round(self.__env.now, 2)}\tJob {self.__id} is waiting for machine for operation {op_id}')
+                    self.__cur_machine = yield self.__env.process(
+                        self.__scheduler.get_matched_machine(self.__id, seq)
+                    )
                     try:
-                        # 가용 가능한 machine 선택
-                        self.__cur_machine = yield self.__env.process(
-                            self.__scheduler.get_matched_machine(self.__id, seq)
-                        )
                         # machine이 할당되고, setup 단계 전까지 가면 qtime check 종료.
                         # qtime_process가 이미 종료되었을 수 있으므로 try-except로 처리
                         try:
