@@ -20,6 +20,7 @@ class Scheduler:
             setup_times_df: 셋업 시간 정보 DataFrame
             op_machine_df: 작업-머신 매핑 정보 DataFrame
         """
+        self.__env = env
         # 머신 그룹별로 FilterStore 생성
         self.__machine_store = {
             group: simpy.FilterStore(env, capacity=float('inf'))
@@ -61,7 +62,7 @@ class Scheduler:
             ['job_id', 'op_seq']
         ).set_index(['job_id', 'op_seq'])
 
-    def get_matched_machine(self, job_id: int, op_seq: int):
+    def get_matched_machine(self, job_id: int, job_type: str, op_seq: int, cur_qtime:float, qtime_start: float):
         """
         주어진 작업에 매칭되는 유휴 머신 반환
         특별한 알고리즘 없이 가장 빨리 유휴 상태로 전환된 아무 머신을 선택
@@ -75,7 +76,9 @@ class Scheduler:
         """
         op_group = self.__op_table.loc[(job_id, op_seq), 'op_group']
         # 가용 가능한 machine에 대해 Filterstore에서 뽑은 후 제공
-        target = yield self.__machine_store[op_group].get(lambda x: x.is_idle())
+        # setup time이 남은 qtime보다 작은 머신 선택
+        remain_qtime = cur_qtime - (self.__env.now - qtime_start)
+        target = yield self.__machine_store[op_group].get(lambda x: x.is_idle() and x.get_setup_time(job_type) < remain_qtime)
         return target
 
     def put_back_machine(self, machine: Machine):
