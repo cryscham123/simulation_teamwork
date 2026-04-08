@@ -99,6 +99,7 @@ class Job:
                         # machine의 resource를 점유한 상태로 로직 시작
                         with self.__cur_machine.resource.request(priority=self.__priority, preempt=False) as req:
                             yield req
+                            self.log_event(event_type='allocated', op_id=op_id, machine_id=self.__cur_machine.id)
 
                             # Setup 단계
                             self.log_event(event_type='setup', op_id=op_id, machine_id=self.__cur_machine.id)
