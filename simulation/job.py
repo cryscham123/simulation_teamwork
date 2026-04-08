@@ -26,6 +26,7 @@ class Job:
         self.__qtime = op_info['qtime'].values
         self.__op_seq = op_info[['op_id', 'op_seq']].values
         self.__scheduler = scheduler
+        self.__qtime_start = 0.0
 
         # 프로세스 상태 관리
         self.__job_process = env.process(self.run())
@@ -91,24 +92,24 @@ class Job:
                     # 가용 가능한 machine 선택
                     self.log_event(event_type='waiting', op_id=op_id)
                     self.__cur_machine = yield self.__env.process(
-                        self.__scheduler.get_matched_machine(self.__id, seq)
+                        self.__scheduler.get_matched_machine(self.__id, self.__type, seq, self.__qtime[seq - 1], self.__qtime_start)
                     )
-                    # machine이 할당되고, setup 단계 전까지 가면 qtime check 종료.
-                    self.__interrupt_qtime(qtime_process)
                     try:
                         # machine의 resource를 점유한 상태로 로직 시작
                         with self.__cur_machine.resource.request(priority=self.__priority, preempt=False) as req:
                             yield req
                             self.log_event(event_type='allocated', op_id=op_id, machine_id=self.__cur_machine.id)
 
-                            # Setup 단계
+                            # setup 단계
                             self.log_event(event_type='setup', op_id=op_id, machine_id=self.__cur_machine.id)
                             self.__sub_process = self.__env.process(
                                 self.__cur_machine.setup(self.__type)
                             )
                             yield self.__sub_process
+                            # setup이 완료되면 qtime check 종료.
+                            self.__interrupt_qtime(qtime_process)
 
-                            # Work 단계
+                            # work 단계
                             is_in_work = True
                             self.log_event(event_type='working', op_id=op_id, machine_id=self.__cur_machine.id)
                             self.__sub_process = self.__env.process(
@@ -135,9 +136,10 @@ class Job:
                 self.log_event(event_type='completed')
 
         except simpy.Interrupt:
-            # Qtime 초과로 인한 job discard
+            # qtime 초과로 인한 job discard
             self.log_event(event_type='interrupt', reason='qtime exceeded')
             self.log_event(event_type='completed')
+            # setup 중 qtime이 초과하는건 비정상적인 케이스. 발견시 제보 바람
             if self.__sub_process:
                 self.__sub_process.interrupt()
             if self.__cur_machine:
