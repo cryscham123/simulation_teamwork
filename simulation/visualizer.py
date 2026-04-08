@@ -29,7 +29,7 @@ def create_job_gantt_chart(jobs: List[Any], max_time:float, title: str = "Job Ga
     for job_id, job_events in df_events.groupby('job_id'):
         for i, (_, event) in enumerate(job_events.sort_values('time').iterrows()):
             if i != 0:
-                gantt_data[-1]['Finish'] = event['time'] if gantt_data[-1]['Resource'] != 'interrupt' else gantt_data[-1]['Start'] + 1
+                gantt_data[-1]['Finish'] = event['time'] if gantt_data[-1]['Resource'] not in ['interrupt', 'allocated'] else gantt_data[-1]['Start'] + 1
                 if gantt_data[-1]['Start'] == gantt_data[-1]['Finish']:
                     gantt_data.pop()
             if event['event_type'] == 'completed':
@@ -45,18 +45,14 @@ def create_job_gantt_chart(jobs: List[Any], max_time:float, title: str = "Job Ga
 
     df_gantt = pd.DataFrame(gantt_data)
 
-    colors = {}
-    for resource in df_gantt['Resource'].unique():
-        if resource == "waiting":
-            colors[resource] = 'rgb(220, 220, 220)'  # 밝은 회색
-        elif resource == "setup":
-            colors[resource] = 'rgb(0, 200, 83)' # 초록색
-        elif resource == "working":
-            colors[resource] = 'rgb(46, 137, 205)'  # 파란색
-        else:
-            colors[resource] = 'rgb(255, 65, 54)'  # 빨간색
+    colors = {
+            "waiting": 'rgb(220, 220, 220)',  # 밝은 회색
+            "allocated": 'rgb(255, 195, 0)',  # 노란색
+            "setup": 'rgb(0, 200, 83)', # 초록색
+            "working": 'rgb(46, 137, 205)',  # 파란색
+            "interrupt": 'rgb(255, 65, 54)'  # 빨간색
+    }
 
-    # Gantt Chart 생성
     fig = ff.create_gantt(
         df_gantt,
         colors=colors,
@@ -67,14 +63,20 @@ def create_job_gantt_chart(jobs: List[Any], max_time:float, title: str = "Job Ga
         showgrid_y=True,
         title=title,
     )
+    target_order = ["interrupt", "working", "setup", "allocated", "waiting"]
 
-    # 레이아웃 업데이트
+    fig.data = sorted(
+        fig.data, 
+        key=lambda x: target_order.index(x.name) if x.name in target_order else 999
+    )
+
     fig.update_layout(
         xaxis_title="Time",
         yaxis_title="Job ID",
         hovermode='closest',
         height=max(400, len(df_gantt['Task'].unique()) * 50),
-        xaxis=dict(range=[0, max_time + 1], type='linear')
+        xaxis=dict(range=[0, max_time + 1], type='linear', dtick=5),
+        legend=dict(traceorder='reversed')
     )
 
     return fig
