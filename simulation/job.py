@@ -1,3 +1,4 @@
+from numpy import inf
 import simpy
 import pandas as pd
 from typing import Dict, Any, Optional
@@ -23,22 +24,38 @@ class Job:
         self.__release_time = job_info['release_time']
         self.__due_date = job_info['due_date']
         self.__priority = job_info['priority']
-        self.__qtime = op_info['qtime'].values
+        self.__qtime = op_info['qtime'].astype(float).values
+        self.__qtime[0] = float(inf) # 첫 번째 operation에 대한 qtime은 고려하지 않는다.
         self.__op_seq = op_info[['op_id', 'op_seq']].values
         self.__scheduler = scheduler
-        self.__qtime_start = 0.0
+        self.__is_completed = False
 
         # 프로세스 상태 관리
-        self.__job_process = env.process(self.run())
         self.__sub_process: Optional[simpy.Process] = None
         self.__cur_machine: Optional[Machine] = None
+        self.__qtime_over_time_start = 0.0
+        self.__total_qtime_over = 0.0
+        self.__is_over_qtime = False
+        env.process(self.run())
 
         # 이벤트 로그
         self.__event_log = []
 
     @property
+    def id(self):
+        return self.__id
+
+    @property
     def event_log(self):
         return self.__event_log
+
+    @property
+    def total_qtime_over(self):
+        return self.__total_qtime_over
+
+    @property
+    def is_completed(self):
+        return self.__is_completed
 
     def log_event(self, event_type: str, op_id: Optional[int] = None, machine_id: Optional[int] = None, reason: Optional[str] = None):
         self.__event_log.append({
@@ -59,10 +76,11 @@ class Job:
             seq: 작업 시퀀스
         """
         try:
-            self.__qtime_start = self.__env.now
             yield self.__env.timeout(self.__qtime[seq - 1])
-            # qtime 초과시 현재 작업을 중단한다.
-            self.__job_process.interrupt()
+            self.__is_over_qtime = True
+            # qtime 초과 시간 기록
+            self.__qtime_over_time_start = self.__env.now
+
         except simpy.Interrupt:
             pass
 
@@ -70,12 +88,11 @@ class Job:
         """
         QTime 체크 프로세스 중단
         """
-        try:
-            if qtime_process.is_alive:
-                qtime_process.interrupt()
-        except (RuntimeError, AttributeError):
-            # 프로세스가 이미 종료되었거나 interrupt할 수 없는 상태
-            pass
+        if not self.__is_over_qtime:
+            qtime_process.interrupt()
+            return
+        self.__total_qtime_over += self.__env.now - self.__qtime_over_time_start
+        self.__is_over_qtime = False
 
 
     def run(self):
@@ -83,65 +100,45 @@ class Job:
         # release time만큼 기다려준다.
         yield self.__env.timeout(self.__release_time)
 
-        try:
-            for op_id, seq in self.__op_seq:
-                while True:
-                    is_in_work = False
-                    # qtime 타이머를 켜고 프로세스 시작
-                    qtime_process = self.__env.process(self.__chk_qtime(seq))
-                    # 가용 가능한 machine 선택
-                    self.log_event(event_type='waiting', op_id=op_id)
-                    self.__cur_machine = yield self.__env.process(
-                        self.__scheduler.get_matched_machine(self.__id, self.__type, seq, self.__qtime[seq - 1], self.__qtime_start)
-                    )
-                    try:
-                        # machine의 resource를 점유한 상태로 로직 시작
-                        with self.__cur_machine.resource.request(priority=self.__priority, preempt=False) as req:
-                            yield req
-                            self.log_event(event_type='allocated', op_id=op_id, machine_id=self.__cur_machine.id)
+        for op_id, seq in self.__op_seq:
+            while True:
+                is_in_work = False
+                # qtime 타이머를 켜고 프로세스 시작
+                qtime_process = self.__env.process(self.__chk_qtime(seq))
+                # 가용 가능한 machine 선택
+                self.log_event(event_type='waiting', op_id=op_id)
+                self.__cur_machine = yield self.__env.process(self.__scheduler.get_matched_machine(self.__id, seq))
+                try:
+                    # machine의 resource를 점유한 상태로 로직 시작
+                    with self.__cur_machine.resource.request(priority=self.__priority, preempt=False) as req:
+                        yield req
+                        self.log_event(event_type='allocated', op_id=op_id, machine_id=self.__cur_machine.id)
 
-                            # setup 단계
-                            self.log_event(event_type='setup', op_id=op_id, machine_id=self.__cur_machine.id)
-                            self.__sub_process = self.__env.process(
-                                self.__cur_machine.setup(self.__type)
-                            )
-                            yield self.__sub_process
-                            # setup이 완료되면 qtime check 종료.
-                            self.__interrupt_qtime(qtime_process)
+                        # setup 단계
+                        self.log_event(event_type='setup', op_id=op_id, machine_id=self.__cur_machine.id)
+                        yield self.__env.process(self.__cur_machine.setup(self.__type))
 
-                            # work 단계
-                            is_in_work = True
-                            self.log_event(event_type='working', op_id=op_id, machine_id=self.__cur_machine.id)
-                            self.__sub_process = self.__env.process(
-                                self.__cur_machine.work(op_id)
-                            )
-                            yield self.__sub_process
-                            is_in_work = False
-                            break
+                        # setup이 완료되면 qtime check 종료.
+                        self.__interrupt_qtime(qtime_process)
 
-                    except simpy.Interrupt:
-                        # Machine breakdown으로 인한 interrupt
-                        self.log_event(event_type='interrupt', op_id=op_id, machine_id=self.__cur_machine.id, reason='machine breakdown')
-                        self.__sub_process = None
-                        self.__scheduler.put_back_machine(self.__cur_machine)
-                        # 작업 중 고장이 발생하면 폐기
-                        if is_in_work:
-                            self.log_event(event_type='completed')
-                            return 
+                        # work 단계
+                        is_in_work = True
+                        self.log_event(event_type='working', op_id=op_id, machine_id=self.__cur_machine.id)
+                        yield self.__env.process(self.__cur_machine.work(op_id))
+                        is_in_work = False
+                        break
 
-                self.__scheduler.put_back_machine(self.__cur_machine)
-                self.__cur_machine = None
-                self.__sub_process = None
-            else:
-                self.log_event(event_type='completed')
+                except simpy.Interrupt:
+                    # Machine breakdown으로 인한 interrupt
+                    self.log_event(event_type='interrupt', op_id=op_id, machine_id=self.__cur_machine.id, reason='machine breakdown')
+                    self.__scheduler.put_back_machine(self.__cur_machine)
+                    # 작업 중 고장이 발생하면 폐기
+                    if is_in_work:
+                        self.log_event(event_type='completed')
+                        return 
 
-        except simpy.Interrupt:
-            # qtime 초과로 인한 job discard
-            self.log_event(event_type='interrupt', reason='qtime exceeded')
+            self.__scheduler.put_back_machine(self.__cur_machine)
+            self.__cur_machine = None
+        else:
             self.log_event(event_type='completed')
-            # setup 중 qtime이 초과하는건 비정상적인 케이스. 발견시 제보 바람
-            if self.__sub_process:
-                self.__sub_process.interrupt()
-            if self.__cur_machine:
-                self.__scheduler.put_back_machine(self.__cur_machine)
-
+            self.__is_completed = True
