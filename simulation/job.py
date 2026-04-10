@@ -29,9 +29,9 @@ class Job:
         self.__op_seq = op_info[['op_id', 'op_seq']].values
         self.__scheduler = scheduler
         self.__is_completed = False
+        self.__completed_time = 0.0
 
         # 프로세스 상태 관리
-        self.__sub_process: Optional[simpy.Process] = None
         self.__cur_machine: Optional[Machine] = None
         self.__qtime_over_time_start = 0.0
         self.__total_qtime_over = 0.0
@@ -56,6 +56,10 @@ class Job:
     @property
     def is_completed(self):
         return self.__is_completed
+
+    @property
+    def completed_time(self):
+        return self.__completed_time
 
     def log_event(self, event_type: str, op_id: Optional[int] = None, machine_id: Optional[int] = None, reason: Optional[str] = None):
         self.__event_log.append({
@@ -91,8 +95,16 @@ class Job:
         if not self.__is_over_qtime:
             qtime_process.interrupt()
             return
-        self.__total_qtime_over += self.__env.now - self.__qtime_over_time_start
+        self.__total_qtime_over = self.calculate_qtime_over(self.__env.now)
         self.__is_over_qtime = False
+
+    def calculate_qtime_over(self, cur_time: float):
+        """
+        QTime 초과 시간 계산 메서드
+        """
+        if self.__is_over_qtime:
+            return self.__total_qtime_over + (cur_time - self.__qtime_over_time_start)
+        return self.__total_qtime_over
 
 
     def run(self):
@@ -142,3 +154,4 @@ class Job:
         else:
             self.log_event(event_type='completed')
             self.__is_completed = True
+            self.__completed_time = self.__env.now

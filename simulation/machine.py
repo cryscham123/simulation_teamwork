@@ -39,12 +39,7 @@ class Machine:
         self.__process_times = process_time_info
 
         # 머신 상태
-        self.__is_repaired = True
-        self.__last_repair_time = 0.0
         self.__last_job_type = None
-
-        # 고장 프로세스 시작
-        env.process(self.__breakdown())
 
     @property
     def id(self) -> int:
@@ -52,41 +47,21 @@ class Machine:
         return self.__id
 
     def __calculate_hazard(self):
-        # h(t) = h0 + hr*t (시간에 따라 증가하는 위험률)
-        # H(t) = h0*t + hr*t²/2 (누적 위험 함수)
-        # H(T) = -ln(U)를 만족하는 T를 계산 (U ~ Uniform(0,1))
-        # h0*T + hr*T²/2 = -ln(U)
-        # 2차 방정식: hr*T²/2 + h0*T + ln(U) = 0
-        # 해: T = (-h0 + sqrt(h0² - 2*hr*ln(U))) / hr
-
         h0 = self.__base_hazard
         hr = self.__hazard_increase_rate
         u = random.random()
 
         return (-h0 + math.sqrt(h0**2 - 2*hr*math.log(u))) / hr
 
-
-    def __breakdown(self):
+    def breakdown(self):
         """머신 고장 프로세스"""
-        while True:
-            yield self.__env.timeout(self.__calculate_hazard())
+        yield self.__env.timeout(self.__calculate_hazard())
+        print(f'{round(self.__env.now, 2)}\tMachine {self.__id} broke down')
+        return self
 
-            # 아직 수리가 안끝났는데 또 고장 이벤트가 발생하면 넘어감
-            if not self.__is_repaired:
-                continue
-
-            self.__is_repaired = False
-            # priority를 -1, preemt=True로 둠으로써, 현재 다른 작업을 수행중이라도 고장 이벤트가 우선적으로 발생하도록 설계
-            with self.resource.request(priority=-1, preempt=True) as req:
-                yield req
-                print(f'{round(self.__env.now, 2)}\tMachine {self.__id} broke down')
-                yield self.__env.process(self.__repair())
-            self.__is_repaired = True
-
-    def __repair(self):
+    def repair(self):
         """머신 수리 프로세스"""
         yield self.__env.timeout(self.__repair_time)
-        self.__last_repair_time = self.__env.now
         # 수리시 setup 정보도 초기화
         self.__last_job_type = None
         print(f'{round(self.__env.now, 2)}\tMachine {self.__id} repaired')

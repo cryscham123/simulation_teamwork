@@ -22,10 +22,8 @@ class Scheduler:
         """
         self.__env = env
         # 머신 그룹별로 FilterStore 생성
-        self.__machine_store = {
-            group: simpy.FilterStore(env, capacity=float('inf'))
-            for group in machine_df['machine_group'].unique()
-        }
+        self.__machine_store = simpy.FilterStore(env, capacity=float('inf'))
+        self.__broken_chk_events = []
 
         # 머신 인스턴스 생성 및 스토어에 추가
         for machine_id, row in machine_df.set_index('machine_id').iterrows():
@@ -55,12 +53,39 @@ class Scheduler:
                 process_time_info=process_time_info
             )
 
-            self.__machine_store[machine_group].put(machine)
+            self.__machine_store.put(machine)
+            self.__broken_chk_events.append(env.process(machine.breakdown()))
+        env.process(self.__chk_machine_broken())
 
         # 작업 테이블 설정
         self.__op_table = operations_df.sort_values(
             ['job_id', 'op_seq']
         ).set_index(['job_id', 'op_seq'])
+
+    def __chk_machine_broken(self):
+        """
+        머신 고장 체크 프로세스
+        """
+        while True:
+            bronken_machines = yield self.__env.any_of(self.__broken_chk_events)
+            for event in bronken_machines:
+                machine = event.value
+                self.__broken_chk_events.remove(event)
+                self.__env.process(self.__machine_repair(machine))
+                self.__broken_chk_events.append(self.__env.process(machine.breakdown()))
+
+    def __machine_repair(self, machine: Machine):
+        """
+        머신 수리 프로세스
+
+        Args:
+            machine: 수리할 머신
+        """
+        with machine.resource.request(priority=-1, preempt=True) as req:
+            yield req
+            yield self.__machine_store.get(lambda x: x.id == machine.id)
+            yield self.__env.process(machine.repair())
+        self.__machine_store.put(machine)
 
     def get_matched_machine(self, job_id: int, op_seq: int):
         """
@@ -76,7 +101,7 @@ class Scheduler:
         """
         op_group = self.__op_table.loc[(job_id, op_seq), 'op_group']
         # 가용 가능한 machine에 대해 Filterstore에서 뽑은 후 제공
-        target = yield self.__machine_store[op_group].get(lambda x: x.is_idle())
+        target = yield self.__machine_store.get(lambda x: x.group == op_group and x.is_idle())
         return target
 
     def put_back_machine(self, machine: Machine):
@@ -86,5 +111,5 @@ class Scheduler:
         Args:
             machine: 반환할 머신
         """
-        self.__machine_store[machine.group].put(machine)
+        self.__machine_store.put(machine)
 
