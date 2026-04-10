@@ -5,8 +5,7 @@ from typing import List, Any
 
 def create_gantt_chart(logs: List[Any], 
                            max_time:float, 
-                           title: str = "Job Gantt Chart",
-                           bar_margin: float = 0.3) -> go.Figure:
+                           title: str = "반도체 공정 시뮬레이션 간트 차트") -> go.Figure:
     """
     Job 리스트로부터 Gantt Chart를 생성
 
@@ -25,15 +24,14 @@ def create_gantt_chart(logs: List[Any],
 
     gantt_data = []
 
-    pd.set_option('display.max_rows', None)  # 모든 행 출력
-    for id, events in df_events.groupby('id'):
+    for id, events in df_events[df_events['resource'] == 'machine'].groupby('id'):
         for _, event in events.sort_values('start').iterrows():
             if event['start'] == event['finish']:
                 continue
             gantt_data.append({
                 'Task': id,
                 'Start': event['start'],
-                'Finish': (event['finish'] if event['finish'] is not None else max_time) - bar_margin,
+                'Finish': (event['finish'] if event['finish'] is not None else max_time),
                 'Resource': f"{event['event']}",
                 'Description': f"{event['description']}"
             })
@@ -67,7 +65,7 @@ def create_gantt_chart(logs: List[Any],
 
     fig.update_layout(
         xaxis_title="Time",
-        yaxis_title="Job ID",
+        yaxis_title="Machine ID",
         hovermode='closest',
         height=max(400, len(df_gantt['Task'].unique()) * 50),
         xaxis=dict(range=[0, max_time + 1], type='linear', dtick=5),

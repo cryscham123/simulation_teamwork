@@ -10,11 +10,12 @@ class EventLogger:
     def logs(self):
         return self.__logs
 
-    def log_event_start(self, id: int, event: str, description: Optional[str] = None):
+    def log_event_start(self, id: int, event: str, resource: str, description: Optional[str] = None):
         self.__logs.append({
             'id': id,
             'event': event,
             'description': description,
+            'resource': resource,
             'start': self.__env.now
         })
         return len(self.__logs) - 1
@@ -23,13 +24,3 @@ class EventLogger:
         if index < 0:
             return
         self.__logs[index]['finish'] = self.__env.now
-
-    def log_point_event(self, id: int, event: str, description: Optional[str] = None):
-        self.__logs.append({
-            'id': id,
-            'event': event,
-            'description': description,
-            'start': self.__env.now,
-            'finish': self.__env.now + 1
-        })
-

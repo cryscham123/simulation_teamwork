@@ -36,18 +36,15 @@ class Job:
         # 프로세스 상태 관리
         self.__sub_process = None
         self.__cur_machine: Optional[Machine] = None
-        self.__qtime_over_time_start = 0.0
-        self.__total_qtime_over = 0.0
         self.__is_over_qtime = False
-        env.process(self.run())
+        self.__process = env.process(self.run())
+
+        self.__qtime_over_time_start = 0.0
+        self.total_qtime_over = 0.0
 
     @property
     def id(self):
         return self.__id
-
-    @property
-    def total_qtime_over(self):
-        return self.__total_qtime_over
 
     @property
     def is_completed(self):
@@ -56,6 +53,13 @@ class Job:
     @property
     def completed_time(self):
         return self.__completed_time
+
+    @property
+    def process(self):
+        return self.__process
+
+    def is_in_due_date(self):
+        return self.__is_completed and self.__due_date < self.__completed_time
 
     def __chk_qtime(self, seq: int):
         """
@@ -80,7 +84,7 @@ class Job:
         if not self.__is_over_qtime:
             qtime_process.interrupt()
             return
-        self.__total_qtime_over = self.calculate_qtime_over(self.__env.now)
+        self.total_qtime_over = self.calculate_qtime_over(self.__env.now)
         self.__is_over_qtime = False
 
     def calculate_qtime_over(self, cur_time: float):
@@ -88,8 +92,8 @@ class Job:
         QTime 초과 시간 계산 메서드
         """
         if self.__is_over_qtime:
-            return self.__total_qtime_over + (cur_time - self.__qtime_over_time_start)
-        return self.__total_qtime_over
+            return self.total_qtime_over + (cur_time - self.__qtime_over_time_start)
+        return self.total_qtime_over
 
 
     def run(self):
@@ -103,7 +107,7 @@ class Job:
                 # qtime 타이머를 켜고 프로세스 시작
                 qtime_process = self.__env.process(self.__chk_qtime(seq))
                 # 가용 가능한 machine 선택
-                idx = self.__event_logger.log_event_start(id=self.id, event='waiting')
+                idx = self.__event_logger.log_event_start(id=self.id, event='waiting', resource='job')
                 self.__cur_machine = yield self.__env.process(self.__scheduler.get_matched_machine(self.__id, seq))
                 self.__event_logger.log_event_finish(idx)
                 try:
@@ -112,7 +116,7 @@ class Job:
                         yield req
 
                         # setup 단계
-                        idx = self.__event_logger.log_event_start(id=self.id, event='setup', description=f'machine: {self.__cur_machine.id}\noperation: {op_id}')
+                        idx = self.__event_logger.log_event_start(id=self.id, event='setup', description=f'machine: {self.__cur_machine.id}\noperation: {op_id}', resource='job')
                         self.__sub_process = self.__env.process(self.__cur_machine.setup(self.__type, op_id, self.__id))
                         yield self.__sub_process
                         self.__event_logger.log_event_finish(idx)
@@ -122,7 +126,7 @@ class Job:
 
                         # work 단계
                         is_in_work = True
-                        idx = self.__event_logger.log_event_start(id=self.id, event='working', description=f'machine: {self.__cur_machine.id}\noperation: {op_id}')
+                        idx = self.__event_logger.log_event_start(id=self.id, event='working', description=f'machine: {self.__cur_machine.id}\noperation: {op_id}', resource='job')
                         self.__sub_process = self.__env.process(self.__cur_machine.work(op_id, self.__id))
                         yield self.__sub_process
                         self.__event_logger.log_event_finish(idx)
@@ -135,7 +139,6 @@ class Job:
                     if self.__sub_process is not None:
                         self.__sub_process.interrupt()
                     self.__event_logger.log_event_finish(idx)
-                    self.__event_logger.log_point_event(id=self.id, event='breakdown', description=f'machine: {self.__cur_machine.id}\noperation: {op_id}')
                     self.__scheduler.put_back_machine(self.__cur_machine)
                     # 작업 중 고장이 발생하면 폐기
                     if is_in_work:

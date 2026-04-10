@@ -74,7 +74,7 @@ class Machine:
     def repair(self):
         """머신 수리 프로세스"""
         self.__is_repairing = True
-        idx = self.__event_logger.log_event_start(self.__id, 'repairing')
+        idx = self.__event_logger.log_event_start(self.__id, 'repairing', 'machine', None)
         yield self.__env.timeout(self.__repair_time)
         self.__event_logger.log_event_finish(idx)
         # 수리시 setup 정보도 초기화
@@ -132,7 +132,7 @@ class Machine:
         """
         idx = -1
         try:
-            idx = self.__event_logger.log_event_start(self.__id, 'setup', f'job: {job_id}\noperation: {op_id}')
+            idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', 'job: {job_id}\noperation: {op_id}')
             yield self.__env.timeout(self.get_setup_time(job_type))
             self.__event_logger.log_event_finish(idx)
             self.__last_job_type = job_type
@@ -148,7 +148,7 @@ class Machine:
         """
         idx = -1
         try:
-            idx = self.__event_logger.log_event_start(self.__id, 'working', f'job: {job_id}\noperation: {op_id}')
+            idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job_id}\noperation: {op_id}')
             yield self.__env.timeout(self.get_process_time(op_id))
             self.__event_logger.log_event_finish(idx)
         except simpy.Interrupt:
