@@ -3,12 +3,13 @@ import random
 import math
 import pandas as pd
 from typing import Dict, Any
-
+from utils import EventLogger
 
 class Machine:
     def __init__(self, env: simpy.Environment, id: int, group: str,
                  failure_info: Dict[str, Any], setup_time_info: pd.DataFrame,
-                 process_time_info: pd.DataFrame):
+                 process_time_info: pd.DataFrame,
+                 event_logger: EventLogger):
         """
         Machine 초기화
 
@@ -19,10 +20,13 @@ class Machine:
             failure_info: 고장 정보 딕셔너리
             setup_time_info: 셋업 시간 정보 DataFrame
             process_time_info: 프로세싱 시간 정보 DataFrame
+            event_logger: 이벤트 기록 인스턴스
         """
         self.__env = env
         self.__id = id
         self.group = group
+        self.__event_logger = event_logger
+        self.__is_repairing = False
 
         # 가정: Machine은 한 번에 하나의 작업만 처리할 수 있다.
         self.resource = simpy.PreemptiveResource(env, capacity=1)
@@ -53,18 +57,29 @@ class Machine:
 
         return (-h0 + math.sqrt(h0**2 - 2*hr*math.log(u))) / hr
 
-    def breakdown(self):
-        """머신 고장 프로세스"""
-        yield self.__env.timeout(self.__calculate_hazard())
-        print(f'{round(self.__env.now, 2)}\tMachine {self.__id} broke down')
-        return self
+    def down(self):
+        """머신 중단 프로세스"""
+        is_broken = True
+        try:
+            # 머신 고장
+            yield self.__env.timeout(self.__calculate_hazard())
+            if self.__is_repairing:
+                is_broken = False
+        except simpy.Interrupt:
+            # 예방 보전 성공으로 인한 인터럽트 발생
+            is_broken = False
+
+        return self, is_broken
 
     def repair(self):
         """머신 수리 프로세스"""
+        self.__is_repairing = True
+        idx = self.__event_logger.log_event_start(self.__id, 'repairing')
         yield self.__env.timeout(self.__repair_time)
+        self.__event_logger.log_event_finish(idx)
         # 수리시 setup 정보도 초기화
+        self.__is_repairing = False
         self.__last_job_type = None
-        print(f'{round(self.__env.now, 2)}\tMachine {self.__id} repaired')
 
     def is_idle(self) -> bool:
         """
@@ -108,22 +123,34 @@ class Machine:
         ]
         return process_time_row['process_time'].iloc[0]
 
-    def setup(self, job_type: str):
+    def setup(self, job_type: str, op_id: int, job_id: int):
         """
         머신 셋업 프로세스
 
         Args:
             job_type: 작업 타입
         """
-        yield self.__env.timeout(self.get_setup_time(job_type))
-        self.__last_job_type = job_type
+        idx = -1
+        try:
+            idx = self.__event_logger.log_event_start(self.__id, 'setup', f'job: {job_id}\noperation: {op_id}')
+            yield self.__env.timeout(self.get_setup_time(job_type))
+            self.__event_logger.log_event_finish(idx)
+            self.__last_job_type = job_type
+        except simpy.Interrupt:
+            self.__event_logger.log_event_finish(idx)
 
-    def work(self, op_id: int):
+    def work(self, op_id: int, job_id: int):
         """
         작업 처리 프로세스
 
         Args:
             op_id: 작업 ID
         """
-        yield self.__env.timeout(self.get_process_time(op_id))
+        idx = -1
+        try:
+            idx = self.__event_logger.log_event_start(self.__id, 'working', f'job: {job_id}\noperation: {op_id}')
+            yield self.__env.timeout(self.get_process_time(op_id))
+            self.__event_logger.log_event_finish(idx)
+        except simpy.Interrupt:
+            self.__event_logger.log_event_finish(idx)
 

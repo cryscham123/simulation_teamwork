@@ -1,14 +1,15 @@
 import simpy
 import pandas as pd
 from .machine import Machine
-
+from utils import EventLogger
 
 class Scheduler:
     """시뮬레이션 환경의 스케줄러 클래스"""
 
     def __init__(self, env: simpy.Environment, machine_df: pd.DataFrame,
                  operations_df: pd.DataFrame, machine_failure_df: pd.DataFrame,
-                 setup_times_df: pd.DataFrame, op_machine_df: pd.DataFrame):
+                 setup_times_df: pd.DataFrame, op_machine_df: pd.DataFrame,
+                 event_logger: EventLogger):
         """
         Scheduler 초기화
 
@@ -19,6 +20,7 @@ class Scheduler:
             machine_failure_df: 머신 고장 정보 DataFrame
             setup_times_df: 셋업 시간 정보 DataFrame
             op_machine_df: 작업-머신 매핑 정보 DataFrame
+            event_logger: 이벤트 기록 인스턴스
         """
         self.__env = env
         # 머신 그룹별로 FilterStore 생성
@@ -50,11 +52,12 @@ class Scheduler:
                 group=machine_group,
                 failure_info=failure_info,
                 setup_time_info=setup_time_info,
-                process_time_info=process_time_info
+                process_time_info=process_time_info,
+                event_logger=event_logger
             )
 
             self.__machine_store.put(machine)
-            self.__broken_chk_events.append(env.process(machine.breakdown()))
+            self.__broken_chk_events.append(env.process(machine.down()))
         env.process(self.__chk_machine_broken())
 
         # 작업 테이블 설정
@@ -69,10 +72,13 @@ class Scheduler:
         while True:
             bronken_machines = yield self.__env.any_of(self.__broken_chk_events)
             for event in bronken_machines:
-                machine = event.value
+                machine, is_broken = event.value
                 self.__broken_chk_events.remove(event)
-                self.__env.process(self.__machine_repair(machine))
-                self.__broken_chk_events.append(self.__env.process(machine.breakdown()))
+                # 예방 보전 성공으로 이벤트가 종료된 경우 수리 진행 x
+                if is_broken:
+                    # 예방 보전 프로세스 인터럽트
+                    self.__env.process(self.__machine_repair(machine))
+                self.__broken_chk_events.append(self.__env.process(machine.down()))
 
     def __machine_repair(self, machine: Machine):
         """
