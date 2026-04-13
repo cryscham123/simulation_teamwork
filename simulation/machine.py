@@ -44,6 +44,10 @@ class Machine:
 
         # 머신 상태
         self.__last_job_type = None
+        self.__event_idx = -1
+
+    def __del__(self):
+        self.__event_logger.log_event_finish(self.__event_idx)
 
     @property
     def id(self) -> int:
@@ -130,14 +134,14 @@ class Machine:
         Args:
             job_type: 작업 타입
         """
-        idx = -1
+        self.__event_idx = -1
         try:
-            idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', 'job: {job_id}\noperation: {op_id}')
+            self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', 'job: {job_id}\noperation: {op_id}')
             yield self.__env.timeout(self.get_setup_time(job_type))
-            self.__event_logger.log_event_finish(idx)
+            self.__event_logger.log_event_finish(self.__event_idx)
             self.__last_job_type = job_type
         except simpy.Interrupt:
-            self.__event_logger.log_event_finish(idx)
+            self.__event_logger.log_event_finish(self.__event_idx)
 
     def work(self, op_id: int, job_id: int):
         """
@@ -146,11 +150,11 @@ class Machine:
         Args:
             op_id: 작업 ID
         """
-        idx = -1
+        self.__event_idx = -1
         try:
-            idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job_id}\noperation: {op_id}')
+            self.__event_idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job_id}\noperation: {op_id}')
             yield self.__env.timeout(self.get_process_time(op_id))
-            self.__event_logger.log_event_finish(idx)
+            self.__event_logger.log_event_finish(self.__event_idx)
         except simpy.Interrupt:
-            self.__event_logger.log_event_finish(idx)
+            self.__event_logger.log_event_finish(self.__event_idx)
 
