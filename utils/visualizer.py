@@ -31,7 +31,7 @@ def create_gantt_chart(logs: List[Any],
             gantt_data.append({
                 'Task': id,
                 'Start': event['start'],
-                'Finish': (event['finish'] if event['finish'] is not None else max_time),
+                'Finish': event['finish'],
                 'Resource': f"{event['event']}",
                 'Description': f"{event['description']}"
             })

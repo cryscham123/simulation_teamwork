@@ -42,6 +42,10 @@ class Job:
         self.__qtime_over_time_start = 0.0
         self.total_qtime_over = 0.0
 
+    def __del__(self):
+        if self.__is_over_qtime:
+            self.total_qtime_over += self.__env.now - self.__qtime_over_time_start
+
     @property
     def id(self):
         return self.__id
@@ -84,17 +88,8 @@ class Job:
         if not self.__is_over_qtime:
             qtime_process.interrupt()
             return
-        self.total_qtime_over = self.calculate_qtime_over(self.__env.now)
+        self.total_qtime_over += self.__env.now - self.__qtime_over_time_start
         self.__is_over_qtime = False
-
-    def calculate_qtime_over(self, cur_time: float):
-        """
-        QTime 초과 시간 계산 메서드
-        """
-        if self.__is_over_qtime:
-            return self.total_qtime_over + (cur_time - self.__qtime_over_time_start)
-        return self.total_qtime_over
-
 
     def run(self):
         """작업 실행 메인 프로세스"""
