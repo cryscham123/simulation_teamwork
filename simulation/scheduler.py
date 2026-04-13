@@ -8,7 +8,8 @@ class Scheduler:
 
     def __init__(self, env: simpy.Environment, machine_df: pd.DataFrame,
                  operations_df: pd.DataFrame, machine_failure_df: pd.DataFrame,
-                 setup_times_df: pd.DataFrame, op_machine_df: pd.DataFrame):
+                 setup_times_df: pd.DataFrame, op_machine_df: pd.DataFrame,
+                 preferred_machines: dict = None):
         """
         Scheduler 초기화
 
@@ -19,6 +20,7 @@ class Scheduler:
             machine_failure_df: 머신 고장 정보 DataFrame
             setup_times_df: 셋업 시간 정보 DataFrame
             op_machine_df: 작업-머신 매핑 정보 DataFrame
+            preferred_machines: GA 머신 선택 염색체 {(job_id, op_seq): machine_id}
         """
         # 머신 그룹별로 FilterStore 생성
         self.__machine_store = {
@@ -56,6 +58,8 @@ class Scheduler:
 
             self.__machine_store[machine_group].put(machine)
 
+        self.__preferred_machines = preferred_machines or {}
+
         # 작업 테이블 설정
         self.__op_table = operations_df.sort_values(
             ['job_id', 'op_seq']
@@ -64,7 +68,8 @@ class Scheduler:
     def get_matched_machine(self, job_id: int, op_seq: int):
         """
         주어진 작업에 매칭되는 유휴 머신 반환
-        특별한 알고리즘 없이 가장 빨리 유휴 상태로 전환된 아무 머신을 선택
+        preferred_machines에 선호 머신이 지정된 경우 해당 머신이 idle이면 우선 선택,
+        선호 머신이 없거나 busy/고장 중이면 그룹 내 임의 idle 머신으로 fallback
 
         Args:
             job_id: 작업 ID
@@ -74,8 +79,18 @@ class Scheduler:
             Machine: 할당된 머신
         """
         op_group = self.__op_table.loc[(job_id, op_seq), 'op_group']
-        # 가용 가능한 machine에 대해 Filterstore에서 뽑은 후 제공
-        target = yield self.__machine_store[op_group].get(lambda x: x.is_idle())
+        store = self.__machine_store[op_group]
+        preferred_id = self.__preferred_machines.get((job_id, op_seq))
+
+        if preferred_id is not None:
+            pref_idle = any(x.id == preferred_id and x.is_idle() for x in store.items)
+            if pref_idle:
+                target = yield store.get(
+                    lambda x, pid=preferred_id: x.id == pid and x.is_idle()
+                )
+                return target
+
+        target = yield store.get(lambda x: x.is_idle())
         return target
 
     def put_back_machine(self, machine: Machine):
