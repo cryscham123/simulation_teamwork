@@ -136,7 +136,7 @@ class Machine:
         """
         self.__event_idx = -1
         try:
-            self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', 'job: {job_id}\noperation: {op_id}')
+            self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', f'job: {job_id}\noperation: {op_id}')
             yield self.__env.timeout(self.get_setup_time(job_type))
             self.__event_logger.log_event_finish(self.__event_idx)
             self.__last_job_type = job_type
@@ -148,12 +148,13 @@ class Machine:
         작업 처리 프로세스
 
         Args:
-            op_id: 작업 ID
+            op_id: 오퍼레이션 ID
+            job_id: 작업 ID
         """
-        self.__event_idx = -1
+        process_time = self.get_process_time(op_id)
         try:
             self.__event_idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job_id}\noperation: {op_id}')
-            yield self.__env.timeout(self.get_process_time(op_id))
+            yield self.__env.timeout(process_time)
             self.__event_logger.log_event_finish(self.__event_idx)
         except simpy.Interrupt:
             self.__event_logger.log_event_finish(self.__event_idx)
