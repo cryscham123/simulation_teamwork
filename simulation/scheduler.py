@@ -117,8 +117,8 @@ class Scheduler:
             for event in waiting_jobs:
                 job, status = event.value
                 self.__chk_job_waiting_events.remove(event)
-                if status in [Job.State.COMPLETED, Job.State.WORKING]:
-                    # 작업 완료 혹은 작업 도중 기계 고장 시 시뮬레이션에서 제외
+                # 작업 완료 시 시뮬레이션에서 제외
+                if status == Job.State.COMPLETED:
                     terminated_jobs += 1
                     continue
                 # 작업 대기 상태 혹은 세팅 도중 기계 고장 시 다시 매칭 시도
@@ -135,8 +135,7 @@ class Scheduler:
         # 이 로직은 phase1에서 처리하도록 변경 예정
         # 임시로 scheduler에서 처리되도록 구현한 상태
         if self.__algorithm is None:
-            op_group = job.get_op_group()
-            target = yield self.__machine_store.get(lambda x: x.group == op_group and x.is_idle())
+            target = yield self.__machine_store.get(lambda x: x.group == job.get_op_group() and x.is_idle())
         else:
             target = yield self.__env.process(self.__algorithm.match_job_machine(job, self.__machine_store))
         process = self.__env.process(job.run(target, qtime_process))
@@ -145,6 +144,10 @@ class Scheduler:
         self.__machine_store.put(target)
 
     def get_simulation_info(self):
+        """
+        임시 함수
+        나중에 event log에서 모든 정보를 추출할 수 있도록 변경 예정
+        """
         completed_cnt = 0
         completed_in_due_date = 0
         total_qtime_violation = 0.0
