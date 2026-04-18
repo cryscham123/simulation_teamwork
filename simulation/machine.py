@@ -57,6 +57,7 @@ class Machine:
 
         return (-h0 + math.sqrt(h0**2 - 2*hr*math.log(u))) / hr
 
+    '''
     def down(self):
         """머신 중단 프로세스"""
         is_broken = True
@@ -70,6 +71,8 @@ class Machine:
             is_broken = False
 
         return self, is_broken
+        
+    '''
 
     def repair(self):
         """머신 수리 프로세스"""
