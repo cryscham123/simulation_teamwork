@@ -1,98 +1,90 @@
 import pandas as pd
+import plotly.figure_factory as ff
 import plotly.graph_objects as go
 from typing import List, Any
 
-
-COLOR_MAP = {
-    'setup':     'rgb(0, 200, 83)',
-    'working':   'rgb(46, 137, 205)',
-    'repairing': 'rgb(255, 140, 0)',
-    'pm':        'rgb(180, 0, 255)',
-}
-
-
 def create_gantt_chart(logs: List[Any],
-                       max_time: float,
-                       title: str = "반도체 공정 시뮬레이션 간트 차트") -> go.Figure:
+                           max_time:float,
+                           title: str = "반도체 공정 시뮬레이션 간트 차트",
+                           exclude_event_types: List[str] = None) -> go.Figure:
     """
-    EventLogger 로그로부터 머신 기준 Gantt Chart 생성.
+    Job 리스트로부터 Gantt Chart를 생성
 
     Args:
-        logs    : event_logger.logs (list of dict)
-        max_time: 시뮬레이션 종료 시각
-        title   : 차트 제목
+        jobs: Job 인스턴스 리스트
+        max_time: 시뮬레이션 최대 시간
+        title: 차트 제목
+        bar_margin: 간트 차트 bar 사이 간격
+
 
     Returns:
         Plotly Figure 객체
     """
-    df = pd.DataFrame(logs)
+    # 모든 Job의 이벤트 로그 수집
+    df_events = pd.DataFrame(logs)
 
-    # machine 이벤트만 사용, finish 없는 행 제거
-    df_m = df[df['resource'] == 'machine'].copy()
-    df_m = df_m.dropna(subset=['finish'])
-    df_m = df_m[df_m['finish'] > df_m['start']]
+    _exclude = set(exclude_event_types) if exclude_event_types else set()
+    gantt_data = []
 
-    if df_m.empty:
-        fig = go.Figure()
-        fig.update_layout(title=title + " (데이터 없음)")
-        return fig
+    for id, events in df_events[df_events['resource'] == 'machine'].groupby('id'):
+        for _, event in events.sort_values('start').iterrows():
+            if event['start'] == event['finish']:
+                continue
+            if event['event'] in _exclude:
+                continue
+            gantt_data.append({
+                'Task': id,
+                'Start': event['start'],
+                'Finish': (event['finish'] if event['finish'] is not None else max_time),
+                'Resource': f"{event['event']}",
+                'Description': f"{event['description']}"
+            })
 
-    machine_ids = sorted(df_m['id'].unique(), key=lambda x: str(x))
-    y_labels = [str(mid) for mid in machine_ids]
 
-    fig = go.Figure()
-    added = set()
+    df_gantt = pd.DataFrame(gantt_data)
 
-    for event_type, color in COLOR_MAP.items():
-        events = df_m[df_m['event'] == event_type]
-        if events.empty:
-            continue
+    # ff.create_gantt은 colors 딕셔너리 키가 'Resource' 컬럼의 실제 값과 정확히 일치해야 함.
+    # 시뮬레이션 종류(Stage I/II)에 따라 등장하는 이벤트가 달라지므로 동적으로 필터링.
+    _all_colors = {
+        "waiting":   'rgb(220, 220, 220)',
+        "setup":     'rgb(0, 200, 83)',
+        "working":   'rgb(46, 137, 205)',
+        "breakdown": 'rgb(255, 65, 54)',
+        "repairing": 'rgb(255, 140, 0)',
+        "pm":        'rgb(148, 103, 189)',
+    }
+    _present = set(df_gantt['Resource'].unique()) if not df_gantt.empty else set()
+    colors = {k: v for k, v in _all_colors.items() if k in _present}
+    # 미등록 이벤트 타입은 기본색으로 추가
+    for evt in _present:
+        if evt not in colors:
+            colors[evt] = 'rgb(150, 150, 150)'
 
-        show_legend = event_type not in added
-        added.add(event_type)
-
-        x_vals, y_vals, base_vals, hover_texts = [], [], [], []
-
-        for _, row in events.iterrows():
-            duration = row['finish'] - row['start']
-            x_vals.append(duration)
-            y_vals.append(str(row['id']))
-            base_vals.append(row['start'])
-            desc = row.get('description') or ''
-            hover_texts.append(
-                f"Machine: {row['id']}<br>"
-                f"Event: {row['event']}<br>"
-                f"Start: {row['start']:.2f}<br>"
-                f"Finish: {row['finish']:.2f}<br>"
-                f"Duration: {duration:.2f}<br>"
-                f"{desc}"
-            )
-
-        fig.add_trace(go.Bar(
-            x=x_vals,
-            y=y_vals,
-            base=base_vals,
-            orientation='h',
-            name=event_type,
-            marker_color=color,
-            hovertext=hover_texts,
-            hoverinfo='text',
-            legendgroup=event_type,
-            showlegend=show_legend,
-        ))
+    fig = ff.create_gantt(
+        df_gantt,
+        colors=colors,
+        index_col='Resource',
+        show_colorbar=True,
+        group_tasks=True,
+        showgrid_x=True,
+        showgrid_y=True,
+        title=title,
+    )
+    _target_order = ["breakdown", "repairing", "pm", "working", "setup", "waiting"]
+    fig.data = sorted(
+        fig.data,
+        key=lambda x: _target_order.index(x.name) if x.name in _target_order else 999
+    )
 
     fig.update_layout(
-        title=title,
-        barmode='overlay',
-        xaxis=dict(title='Time', range=[0, max_time + 1]),
-        yaxis=dict(
-            title='Machine ID',
-            categoryorder='array',
-            categoryarray=y_labels,
-        ),
+        xaxis_title="Time",
+        yaxis_title="Machine ID",
         hovermode='closest',
-        height=max(400, len(machine_ids) * 60 + 150),
-        legend=dict(title='Event Type'),
+        height=max(400, len(df_gantt['Task'].unique()) * 50),
+        xaxis=dict(range=[0, max_time + 1], type='linear', dtick=5),
+        legend=dict(traceorder='reversed'),
+        bargap=1,
+        bargroupgap=1
     )
 
     return fig

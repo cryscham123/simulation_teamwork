@@ -28,5 +28,10 @@ class DataLoader:
         data['operation_machine_map'] = pd.read_csv(os.path.join(self.base_data_path, 'operation_machine_map.csv'))
         data['operations'] = pd.read_csv(os.path.join(self.base_data_path, 'operations.csv'))
         data['setup_times'] = pd.read_csv(os.path.join(self.base_data_path, 'setup_times.csv'))
+        data['qtime_constraints'] = pd.read_csv(os.path.join(self.base_data_path, 'qtime_constraints.csv'))
 
         return data
+
+    def get_qtime_for_job(self, qtime_df: pd.DataFrame, job_id: str) -> pd.DataFrame:
+        """특정 Job의 qtime 제약만 필터링"""
+        return qtime_df[qtime_df['job_id'] == job_id].reset_index(drop=True)

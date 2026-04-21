@@ -1,14 +1,14 @@
 from numpy import inf
 import simpy
 import pandas as pd
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from .scheduler import Scheduler
-from .machine import Machine
 from utils import EventLogger
 
 class Job:
     def __init__(self, env: simpy.Environment, job_info: Dict[str, Any],
-                 op_info: pd.DataFrame, scheduler: Scheduler, event_logger: EventLogger):
+                 op_info: pd.DataFrame, qtime_df: pd.DataFrame,
+                 scheduler: Scheduler, event_logger: EventLogger):
         """
         Job 초기화
 
@@ -16,6 +16,7 @@ class Job:
             env: SimPy 환경
             job_info: 작업 정보 딕셔너리
             op_info: 작업 operation 정보 DataFrame
+            qtime_df: 이 Job의 qtime 제약 DataFrame (qtime_constraints.csv에서 필터링)
             scheduler: 스케줄러 인스턴스
             event_logger: 이벤트 기록 인스턴스
         """
@@ -25,8 +26,17 @@ class Job:
         self.__release_time = job_info['release_time']
         self.__due_date = job_info['due_date']
         self.__priority = job_info['priority']
-        self.__qtime = op_info['qtime'].astype(float).values
-        self.__qtime[0] = float(inf) # 첫 번째 operation에 대한 qtime은 고려하지 않는다.
+
+        # qtime_constraints.csv 기반으로 qtime 배열 구성
+        num_ops = len(op_info)
+        self.__qtime = [float(inf)] * num_ops
+        if qtime_df is not None and not qtime_df.empty:
+            for _, row in qtime_df.iterrows():
+                to_seq = int(row['to_op_seq'])
+                if 1 <= to_seq <= num_ops:
+                    self.__qtime[to_seq - 1] = float(row['max_qtime'])
+        self.__qtime[0] = float(inf)  # 첫 번째 operation에 대한 qtime은 고려하지 않는다.
+
         self.__op_seq = op_info[['op_id', 'op_seq']].values
         self.__scheduler = scheduler
         self.__event_logger = event_logger
@@ -34,8 +44,6 @@ class Job:
         self.__completed_time = 0.0
 
         # 프로세스 상태 관리
-        self.__sub_process = None
-        self.__cur_machine: Optional[Machine] = None
         self.__is_over_qtime = False
         self.__process = env.process(self.run())
 
@@ -82,7 +90,8 @@ class Job:
         QTime 체크 프로세스 중단
         """
         if not self.__is_over_qtime:
-            qtime_process.interrupt()
+            if qtime_process.is_alive:
+                qtime_process.interrupt()
             return
         self.total_qtime_over = self.calculate_qtime_over(self.__env.now)
         self.__is_over_qtime = False
@@ -97,53 +106,65 @@ class Job:
 
 
     def run(self):
-        """작업 실행 메인 프로세스"""
-        # release time만큼 기다려준다.
+        """
+        작업 실행 메인 프로세스.
+        각 op마다:
+          1. QTime 타이머 시작 (op당 1회)
+          2. job_context 빌드 후 route_job_to_machine으로 Machine Queue에 Push
+          3. done_event 대기 — Machine.run()이 처리 완료 시 트리거
+          4. 결과: 'done' → 다음 op / 'failed' → Job 폐기 / 'requeue' → 재라우팅
+        """
         yield self.__env.timeout(self.__release_time)
 
         for op_id, seq in self.__op_seq:
+            # QTime 타이머는 op당 1회 생성 — 재라우팅(requeue) 시에도 계속 유지
+            qtime_process = self.__env.process(self.__chk_qtime(seq))
+
             while True:
-                is_in_work = False
-                # qtime 타이머를 켜고 프로세스 시작
-                qtime_process = self.__env.process(self.__chk_qtime(seq))
-                # 가용 가능한 machine 선택
-                idx = self.__event_logger.log_event_start(id=self.id, event='waiting', resource='job')
-                self.__cur_machine = yield self.__env.process(self.__scheduler.get_matched_machine(self.__id, seq))
-                self.__event_logger.log_event_finish(idx)
-                try:
-                    # machine의 resource를 점유한 상태로 로직 시작
-                    with self.__cur_machine.resource.request(priority=self.__priority, preempt=False) as req:
-                        yield req
+                done_event = self.__env.event()
 
-                        # setup 단계
-                        idx = self.__event_logger.log_event_start(id=self.__cur_machine.id, event='setup', description=f'job: {self.__id}\noperation: {op_id}', resource='machine')
-                        self.__sub_process = self.__env.process(self.__cur_machine.setup(self.__type, op_id, self.__id))
-                        yield self.__sub_process
-                        self.__event_logger.log_event_finish(idx)
+                # --- 대기(waiting) 로그 시작, Machine이 Queue에서 꺼낼 때 종료 ---
+                wait_idx = self.__event_logger.log_event_start(
+                    id=self.id, event='waiting', resource='job'
+                )
 
-                        # setup이 완료되면 qtime check 종료.
-                        self.__interrupt_qtime(qtime_process)
+                job_context = {
+                    'job_id':    self.__id,
+                    'job_type':  self.__type,
+                    'op_id':     op_id,
+                    'op_seq':    seq,
+                    'due_date':  self.__due_date,
+                    'release_time': self.__release_time,
+                    'priority':  self.__priority,
+                    # QTime 제약 정보 (dispatching score 계산용)
+                    'max_qtime': self.__qtime[seq - 1],
+                    # Machine이 Queue에서 꺼낼 때 호출 → waiting 로그 종료
+                    'end_wait_fn':        lambda wi=wait_idx: self.__event_logger.log_event_finish(wi),
+                    # Setup 완료 후 Machine이 호출 → QTime 모니터 중단
+                    'qtime_interrupt_fn': lambda qp=qtime_process: self.__interrupt_qtime(qp),
+                    'done_event': done_event,
+                }
 
-                        # work 단계
-                        is_in_work = True
-                        idx = self.__event_logger.log_event_start(id=self.__cur_machine.id, event='working', description=f'job: {self.__id}\noperation: {op_id}', resource='machine')
-                        self.__sub_process = self.__env.process(self.__cur_machine.work(op_id, self.__id))
-                        yield self.__sub_process
-                        self.__event_logger.log_event_finish(idx)
-                        is_in_work = False
-                        self.__sub_process = None
-                        break
+                # EFT 라우팅 → transport_job → Machine Queue에 Push
+                yield self.__env.process(
+                    self.__scheduler.route_job_to_machine(job_context)
+                )
 
-                except simpy.Interrupt:
-                    # Machine breakdown으로 인한 interrupt
-                    if self.__sub_process is not None:
-                        self.__sub_process.interrupt()
-                    self.__event_logger.log_event_finish(idx)
-                    self.__scheduler.put_back_machine(self.__cur_machine)
-                    if is_in_work:
-                        return
-            self.__scheduler.put_back_machine(self.__cur_machine)
-            self.__cur_machine = None
-        else:
-            self.__is_completed = True
-            self.__completed_time = self.__env.now
+                # Machine이 처리 완료 또는 고장 시 done_event 트리거
+                result = yield done_event
+
+                status = result['status']
+                if status == 'failed':
+                    # work 중 고장 → Job 폐기
+                    return
+                elif status == 'requeue':
+                    # setup 중 고장 → 다른 Machine으로 재라우팅 (QTime 타이머 유지)
+                    continue
+                else:
+                    # 정상 완료
+                    break
+
+            self.__scheduler.notify_op_finish(self.__id, seq)
+
+        self.__is_completed = True
+        self.__completed_time = self.__env.now

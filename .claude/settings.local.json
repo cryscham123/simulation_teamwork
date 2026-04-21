@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import json; nb=json.load\\(open\\('result.ipynb'\\)\\); [print\\(i, c['cell_type'], repr\\(''.join\\(c['source']\\)[:80]\\)\\) for i,c in enumerate\\(nb['cells']\\)]\")",
+      "Bash(python3 -c \"import json; nb=json.load\\(open\\('result.ipynb'\\)\\); [print\\(i, c['cell_type'], repr\\(''.join\\(c['source']\\)[:80]\\)\\) for i,c in enumerate\\(nb['cells']\\)]\")",
+      "Bash(py -c \"import json; nb=json.load\\(open\\('result.ipynb'\\)\\); [print\\(i, c['cell_type'], repr\\(''.join\\(c['source']\\)[:80]\\)\\) for i,c in enumerate\\(nb['cells']\\)]\")",
+      "Bash(py -c \"import json; nb=json.load\\(open\\('result.ipynb', encoding='utf-8'\\)\\); [print\\(i, c['cell_type'], repr\\(''.join\\(c['source']\\)[:80]\\)\\) for i,c in enumerate\\(nb['cells']\\)]\")"
+    ]
+  }
+}
