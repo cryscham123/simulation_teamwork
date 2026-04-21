@@ -42,6 +42,7 @@ class Job:
         self.__sub_process = None
         self.__is_over_qtime = False
         self.__cur_event_idx = -1
+        self.is_released = False
 
         self.__qtime_over_time_start = 0.0
         self.total_qtime_over = 0.0
@@ -102,6 +103,7 @@ class Job:
         cur_state = self.State.WAITING
         if self.__cur_seq == 0:
             yield self.__env.timeout(self.__release_time)
+            self.is_released = True
         else:
             op_id, _ = self.__op_seq[self.__cur_seq - 1]
             try:
