@@ -42,7 +42,6 @@ class Machine:
         self.__base_hazard = failure_info['base_hazard']
         self.__hazard_increase_rate = failure_info['hazard_increase_rate']
         self.__repair_time = failure_info['repair_time']
-        # PM 관련 로직은 현재 구현되어 있지 않다.
         self.__pm_duration = failure_info['pm_duration']
 
         # 시간 정보
