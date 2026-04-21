@@ -1,4 +1,4 @@
-from numpy import inf, ma
+from numpy import inf
 import simpy
 import pandas as pd
 from .machine import Machine
