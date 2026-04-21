@@ -13,8 +13,6 @@ def create_gantt_chart(logs: List[Any],
         jobs: Job 인스턴스 리스트
         max_time: 시뮬레이션 최대 시간
         title: 차트 제목
-        bar_margin: 간트 차트 bar 사이 간격
-
 
     Returns:
         Plotly Figure 객체
@@ -42,8 +40,8 @@ def create_gantt_chart(logs: List[Any],
             "waiting": 'rgb(220, 220, 220)',  # 밝은 회색
             "setup": 'rgb(0, 200, 83)', # 초록색
             "working": 'rgb(46, 137, 205)',  # 파란색
-            "breakdown": 'rgb(255, 65, 54)',  # 빨간색
-            "repairing": 'rgb(255, 140, 0)'  # 주황색
+            "repairing": 'rgb(255, 65, 54)',  # 빨간색
+            "PM": 'rgb(255, 140, 0)'  # 주황색
     }
 
     fig = ff.create_gantt(
@@ -56,7 +54,7 @@ def create_gantt_chart(logs: List[Any],
         showgrid_y=True,
         title=title,
     )
-    target_order = ["breakdown", "repairing", "working", "setup", "waiting"]
+    target_order = ["repairing", "PM", "working", "setup", "waiting"]
 
     fig.data = sorted(
         fig.data, 

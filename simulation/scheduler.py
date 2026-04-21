@@ -1,3 +1,4 @@
+from numpy import inf, ma
 import simpy
 import pandas as pd
 from .machine import Machine
@@ -23,7 +24,7 @@ class Scheduler:
         self.__env = env
         # 머신 그룹별로 FilterStore 생성
         self.__machine_store = simpy.FilterStore(env, capacity=float('inf'))
-        self.__broken_chk_events = []
+        self.__machine_events = []
 
         # 머신 인스턴스 생성 및 스토어에 추가
         for machine_id, row in data['machines'].set_index('machine_id').iterrows():
@@ -56,10 +57,11 @@ class Scheduler:
                 process_time_info=process_time_info,
                 event_logger=event_logger
             )
-
+            machine.down_process = env.process(machine.down())
+            machine.pm_process = env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else inf))
+            self.__machine_events += [machine.down_process, machine.pm_process]
             self.__machine_store.put(machine)
-            self.__broken_chk_events.append(env.process(machine.down()))
-        env.process(self.__chk_machine_broken())
+        env.process(self.__chk_machine_event())
 
         self.__jobs = []
         self.__chk_job_waiting_events = []
@@ -79,19 +81,24 @@ class Scheduler:
             self.__chk_job_waiting_events.append(env.process(job.run()))
         self.job_chk_process = env.process(self.__chk_job_waiting(len(self.__chk_job_waiting_events)))
 
-    def __chk_machine_broken(self):
+    def __chk_machine_event(self):
         """
         머신 고장 체크 프로세스
         """
         while True:
-            bronken_machines = yield self.__env.any_of(self.__broken_chk_events)
-            for event in bronken_machines:
-                machine, is_broken = event.value
-                self.__broken_chk_events.remove(event)
-                # 예방 보전 성공으로 이벤트가 종료된 경우 수리 진행 x
-                if is_broken:
-                    # 예방 보전 프로세스 인터럽트
-                    self.__env.process(self.__machine_repair(machine))
+            events = yield self.__env.any_of(self.__machine_events)
+            for event in events:
+                if event.name == '__machine_repair':
+                    self.__machine_events.remove(event)
+                    continue
+                machine = event.value
+                self.__machine_events.remove(machine.down_process)
+                self.__machine_events.remove(machine.pm_process)
+                if machine.cur_state == Machine.State.REPAIRING:
+                    machine.pm_process.interrupt()
+                else:
+                    machine.down_process.interrupt()
+                self.__machine_events.append(self.__env.process(self.__machine_repair(machine)))
 
     def __machine_repair(self, machine: Machine):
         """
@@ -104,8 +111,10 @@ class Scheduler:
             yield req
             yield self.__machine_store.get(lambda x: x.id == machine.id)
             yield self.__env.process(machine.repair())
+        machine.down_process = self.__env.process(machine.down())
+        machine.pm_process = self.__env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else inf))
+        self.__machine_events += [machine.down_process, machine.pm_process]
         self.__machine_store.put(machine)
-        self.__broken_chk_events.append(self.__env.process(machine.down()))
 
     def __chk_job_waiting(self, num_jobs: int):
         """
@@ -115,6 +124,9 @@ class Scheduler:
         while terminated_jobs < num_jobs:
             waiting_jobs = yield self.__env.any_of(self.__chk_job_waiting_events)
             for event in waiting_jobs:
+                if event.name == '__matching_machine':
+                    self.__chk_job_waiting_events.remove(event)
+                    continue
                 job, status = event.value
                 self.__chk_job_waiting_events.remove(event)
                 # 작업 완료 시 시뮬레이션에서 제외
@@ -122,7 +134,7 @@ class Scheduler:
                     terminated_jobs += 1
                     continue
                 # 작업 대기 상태 혹은 세팅 도중 기계 고장 시 다시 매칭 시도
-                self.__env.process(self.__matching_machine(job))
+                self.__chk_job_waiting_events.append(self.__env.process(self.__matching_machine(job)))
 
     def __matching_machine(self, job: Job):
         """
