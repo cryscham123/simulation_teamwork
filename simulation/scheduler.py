@@ -24,6 +24,7 @@ class Scheduler:
         self.__env = env
         # 머신 그룹별로 FilterStore 생성
         self.__machine_store = simpy.FilterStore(env, capacity=float('inf'))
+        self.__machines = []
         self.__machine_events = []
 
         # 머신 인스턴스 생성 및 스토어에 추가
@@ -61,6 +62,7 @@ class Scheduler:
             machine.pm_process = env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else inf))
             self.__machine_events += [machine.down_process, machine.pm_process]
             self.__machine_store.put(machine)
+            self.__machines.append(machine)
         env.process(self.__chk_machine_event())
 
         self.__jobs = []
@@ -149,7 +151,8 @@ class Scheduler:
         if self.__algorithm is None:
             target = yield self.__machine_store.get(lambda x: x.group == job.get_op_group() and x.is_idle())
         else:
-            target = yield self.__env.process(self.__algorithm.match_job_machine(job, self.__machine_store))
+            target = self.__algorithm.match_job_machine(job, self.__machines)
+            target = yield self.__machine_store.get(lambda x: x.id == target.id)
         process = self.__env.process(job.run(target, qtime_process))
         self.__chk_job_waiting_events.append(process)
         yield process
