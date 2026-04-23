@@ -58,7 +58,7 @@ class Scheduler:
                 process_time_info=process_time_info,
                 event_logger=event_logger
             )
-            machine.down_process = env.process(machine.down())
+            machine.down_process = env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else inf))
             machine.pm_process = env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else inf))
             self.__machine_events += [machine.down_process, machine.pm_process]
             self.__machine_store.put(machine)
@@ -113,7 +113,7 @@ class Scheduler:
             yield req
             yield self.__machine_store.get(lambda x: x.id == machine.id)
             yield self.__env.process(machine.repair())
-        machine.down_process = self.__env.process(machine.down())
+        machine.down_process = self.__env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else inf))
         machine.pm_process = self.__env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else inf))
         self.__machine_events += [machine.down_process, machine.pm_process]
         self.__machine_store.put(machine)

@@ -64,17 +64,18 @@ class Machine:
         return self.__id
 
     def __calculate_hazard(self):
+        """일단은 남겨 놓음. rule-based 알고리즘에 옮겨주길 바람."""
         h0 = self.__base_hazard
         hr = self.__hazard_increase_rate
         u = random.random()
 
         return (-h0 + math.sqrt(h0**2 - 2*hr*math.log(u))) / hr
 
-    def down(self):
+    def down(self, time_to_fail: float):
         """머신 중단 프로세스"""
         try:
             # 머신 고장
-            yield self.__env.timeout(self.__calculate_hazard())
+            yield self.__env.timeout(time_to_fail)
             if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
                 return self
             self.cur_state = Machine.State.REPAIRING
@@ -83,10 +84,10 @@ class Machine:
             pass
         return self
 
-    def PM(self, pm_time: float):
+    def PM(self, time_to_PM: float):
         """예방 보전 프로세스"""
         try:
-            yield self.__env.timeout(pm_time)
+            yield self.__env.timeout(time_to_PM)
             if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
                 return self
             self.cur_state = Machine.State.PM
