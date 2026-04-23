@@ -58,8 +58,8 @@ class Scheduler:
                 process_time_info=process_time_info,
                 event_logger=event_logger
             )
-            machine.down_process = env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else inf))
-            machine.pm_process = env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else inf))
+            machine.down_process = env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else machine.calculate_hazard()))
+            machine.pm_process = env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else 30))
             self.__machine_events += [machine.down_process, machine.pm_process]
             self.__machine_store.put(machine)
             self.__machines.append(machine)
@@ -113,8 +113,8 @@ class Scheduler:
             yield req
             yield self.__machine_store.get(lambda x: x.id == machine.id)
             yield self.__env.process(machine.repair())
-        machine.down_process = self.__env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else inf))
-        machine.pm_process = self.__env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else inf))
+        machine.down_process = self.__env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else machine.calculate_hazard()))
+        machine.pm_process = self.__env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else 30))
         self.__machine_events += [machine.down_process, machine.pm_process]
         self.__machine_store.put(machine)
 
@@ -153,9 +153,9 @@ class Scheduler:
         else:
             target = self.__algorithm.match_job_machine(job, self.__machines)
             target = yield self.__machine_store.get(lambda x: x.id == target.id)
-        process = self.__env.process(job.run(target, qtime_process))
-        self.__chk_job_waiting_events.append(process)
-        yield process
+        target.run_process = self.__env.process(job.run(target, qtime_process))
+        self.__chk_job_waiting_events.append(target.run_process)
+        yield target.run_process
         self.__machine_store.put(target)
 
     def get_simulation_info(self):
