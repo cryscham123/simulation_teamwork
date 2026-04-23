@@ -111,7 +111,6 @@ class Scheduler:
         """
         with machine.resource.request(priority=-1, preempt=True) as req:
             yield req
-            yield self.__machine_store.get(lambda x: x.id == machine.id)
             yield self.__env.process(machine.repair())
         machine.down_process = self.__env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else machine.calculate_hazard()))
         machine.pm_process = self.__env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else 30))
@@ -156,7 +155,8 @@ class Scheduler:
         target.run_process = self.__env.process(job.run(target, qtime_process))
         self.__chk_job_waiting_events.append(target.run_process)
         yield target.run_process
-        self.__machine_store.put(target)
+        if target.cur_state == Machine.State.IDLE:
+            self.__machine_store.put(target)
 
     def get_simulation_info(self):
         """
