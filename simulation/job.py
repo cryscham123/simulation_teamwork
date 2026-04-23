@@ -137,6 +137,7 @@ class Job:
                 if self.__sub_process is not None:
                     self.__sub_process.interrupt()
                     self.__event_logger.log_event_finish(self.__cur_event_idx)
+                    self.__sub_process = None
                 return self, cur_state
         cur_state = self.State.WAITING
         self.__cur_seq += 1

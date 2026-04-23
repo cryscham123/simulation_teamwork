@@ -54,6 +54,7 @@ class Machine:
         self.cur_state = Machine.State.IDLE
         self.down_process = None
         self.pm_process = None
+        self.run_process = None
 
     def __del__(self):
         self.__event_logger.log_event_finish(self.__event_idx)
@@ -63,7 +64,7 @@ class Machine:
         """머신 ID 반환"""
         return self.__id
 
-    def __calculate_hazard(self):
+    def calculate_hazard(self):
         """일단은 남겨 놓음. rule-based 알고리즘에 옮겨주길 바람."""
         h0 = self.__base_hazard
         hr = self.__hazard_increase_rate
@@ -90,6 +91,9 @@ class Machine:
             yield self.__env.timeout(time_to_PM)
             if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
                 return self
+            # 예방 보전 시작 전, 현재 작업이 있다면 완료될 때까지 대기
+            if self.cur_state != Machine.State.IDLE:
+                yield self.run_process
             self.cur_state = Machine.State.PM
         except simpy.Interrupt:
             # 머신 고장으로 인한 인터럽트 발생
