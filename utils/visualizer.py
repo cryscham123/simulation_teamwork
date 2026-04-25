@@ -1,3 +1,4 @@
+from numba.cuda import target
 import pandas as pd
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
@@ -60,12 +61,11 @@ def create_gantt_chart(logs: List[Any],
         showgrid_y=True,
         title=title,
     )
-    jobs = df_events[df_events['resource'] == 'job']['id'].sort_values().unique()
-    target_order = ["repairing", "PM", "waiting", "setup"] + [f"working-{i}" for i in jobs]
+    target_order = ["repairing", "PM", "waiting", "setup"]
 
     fig.data = sorted(
         fig.data, 
-        key=lambda x: target_order.index(x.name) if x.name in target_order else 999
+        key=lambda x: target_order.index(x.name) if x.name in target_order else len(target_order) + int(x.name.split("-")[1][1:]) if "working" in x.name else len(target_order) + 100
     )
 
     fig.update_layout(
