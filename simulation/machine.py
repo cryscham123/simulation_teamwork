@@ -22,7 +22,7 @@ class Machine:
 
     def __init__(self, env: simpy.Environment, id: int, group: str,
                  failure_info: Dict[str, Any], setup_time_info: pd.DataFrame,
-                 process_time_info: pd.DataFrame,
+                 process_time_info: pd.DataFrame, pm_hazard_threshold: float,
                  event_logger: EventLogger, event_queue: simpy.Store):
         """
         Machine 초기화
@@ -34,6 +34,7 @@ class Machine:
             failure_info: 고장 정보 딕셔너리
             setup_time_info: 셋업 시간 정보 DataFrame
             process_time_info: 프로세싱 시간 정보 DataFrame
+            pm_hazard_threshold: PM 고장 확률 임계값
             event_logger: 이벤트 기록 인스턴스
             event_queue: 머신 이벤트를 기록할 queue
         """
@@ -51,6 +52,7 @@ class Machine:
         self.__hazard_increase_rate = failure_info['hazard_increase_rate']
         self.__repair_time = failure_info['repair_time']
         self.__pm_duration = failure_info['pm_duration']
+        self.__pm_hazard_threshold = pm_hazard_threshold
 
         # 시간 정보
         self.__setup_times = setup_time_info
@@ -116,10 +118,23 @@ class Machine:
             return
         self.__event_queue.put(self)
 
-    def PM(self, time_to_PM: float):
+    def __calculate_PM_time(self):
+        h0 = self.__base_hazard
+        hr = self.__hazard_increase_rate
+        thr = self.__pm_hazard_threshold
+        if hr > 0:
+            t_star = (-h0 + math.sqrt(h0 * h0 + 2.0 * hr * thr)) / hr
+        elif h0 > 0:
+            t_star = thr / h0
+        else:
+            t_star = inf
+        self.next_pm_time = self.__env.now + t_star
+        return t_star
+
+    def PM(self):
         """예방 보전 프로세스"""
         try:
-            yield self.__env.timeout(time_to_PM)
+            yield self.__env.timeout(self.__calculate_PM_time())
             if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
                 return
         except simpy.Interrupt:
