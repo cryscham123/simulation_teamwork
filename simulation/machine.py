@@ -7,6 +7,7 @@ from typing import Dict, Any
 from utils import EventLogger
 from enum import Enum
 from .job import Job
+import os
 
 class Machine:
     class State(Enum):
@@ -96,6 +97,8 @@ class Machine:
         기존 base.py에서 처리하던걸 다시 machine으로 이관.
         csv 값을 통해 원하는 동작 처리 가능
         """
+        if os.getenv('DOWN_ACTIVE', 'True').lower() == 'false':
+            return inf
         h0 = self.__base_hazard
         hr = self.__hazard_increase_rate
         u = random.random()
@@ -119,6 +122,8 @@ class Machine:
         self.__event_queue.put(self)
 
     def __calculate_PM_time(self):
+        if os.getenv('PM_ACTIVE', 'True').lower() == 'false':
+            return inf
         h0 = self.__base_hazard
         hr = self.__hazard_increase_rate
         thr = self.__pm_hazard_threshold

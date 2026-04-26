@@ -2,15 +2,20 @@ import simpy
 import pandas as pd
 from .machine import Machine
 from utils import EventLogger
-from algorithms import Algorithm
 from typing import Dict
 from .job import Job
 import random
+import os
 
 class Scheduler:
     """시뮬레이션 환경의 스케줄러 클래스"""
 
-    def __init__(self, env: simpy.Environment, data: Dict[str, pd.DataFrame], event_logger: EventLogger, pm_hazard_threshold: float, algorithm: Algorithm = None):
+    def __init__(self, 
+                 env: simpy.Environment, 
+                 data: Dict[str, pd.DataFrame], 
+                 event_logger: EventLogger, 
+                 pm_hazard_threshold: float,
+                 qtime_urgency_factor: float):
         """
         Scheduler 초기화
 
@@ -18,11 +23,11 @@ class Scheduler:
             env: SimPy 환경
             data: 시뮬레이션에 필요한 데이터 딕셔너리
             event_logger: 이벤트 기록 인스턴스
-            algorithm: 작업과 머신 매칭 알고리즘 (기본값: None)
             pm_hazard_threshold: PM 고장 확률 임계값
+            qtime_urgency_factor: QTime 긴급도 가중치
         """
-        self.__algorithm = algorithm
         self.__env = env
+        self.__qutime_urgency_factor = qtime_urgency_factor
         self.__machines = []
         self.machine_events = simpy.Store(env, capacity=float('inf'))
 
@@ -138,13 +143,39 @@ class Scheduler:
         job.start_qtime_chk()
         # 이 로직은 phase1에서 처리하도록 변경 예정
         # 임시로 scheduler에서 처리되도록 구현한 상태
-        if self.__algorithm is None:
+        target = self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'random'))
+        yield target.put_job(job)
+        self.__env.process(job.operation_completed())
+
+    def __match_job_machine(self, job: Job, machines: list, choice_method: str):
+        """
+        작업과 매칭되는 머신 선택
+
+        Args:
+            job: 매칭할 작업
+            machines: 머신 리스트
+            choice_method: 머신 선택 방법 (예: 'random', 'shortest')
+
+        Returns:
+            Machine: 선택된 머신
+        """
+        if choice_method == 'random':
             target = [x for x in self.__machines if x.group == job.get_op_group()]
             target = target[random.randint(0, len(target)-1)]
         else:
-            target = self.__algorithm.match_job_machine(job, self.__machines)
-        yield target.put_job(job)
-        self.__env.process(job.operation_completed())
+            candidates = [
+                m for m in machines
+                if m.group == job.get_op_group()
+            ]
+            op_id = job.get_current_operation()
+
+            avg_proc = sum(m.get_process_time(op_id) for m in candidates) / len(candidates)
+            urgency_threshold = avg_proc * self.__qutime_urgency_factor
+            # 얘는 뭐에 쓰임?
+            _is_urgent = job.get_remain_qtime() < urgency_threshold
+
+            # 작업이 언제 시작할 지 모르기 때문에, setup time은 정확하지 않음.
+            return min(candidates, key=lambda m: m.get_process_time(op_id) + 1000000000000000 * (int(not m.is_idle()) + m.queue_size()))
 
     def get_simulation_info(self):
         """
