@@ -1,4 +1,3 @@
-from numpy import inf
 import simpy
 import pandas as pd
 from .machine import Machine
@@ -7,7 +6,6 @@ from algorithms import Algorithm
 from typing import Dict
 from .job import Job
 import random
-import os
 
 class Scheduler:
     """시뮬레이션 환경의 스케줄러 클래스"""
