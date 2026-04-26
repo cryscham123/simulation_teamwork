@@ -12,7 +12,7 @@ import os
 class Scheduler:
     """시뮬레이션 환경의 스케줄러 클래스"""
 
-    def __init__(self, env: simpy.Environment, data: Dict[str, pd.DataFrame], event_logger: EventLogger, algorithm: Algorithm = None):
+    def __init__(self, env: simpy.Environment, data: Dict[str, pd.DataFrame], event_logger: EventLogger, pm_hazard_threshold: float, algorithm: Algorithm = None):
         """
         Scheduler 초기화
 
@@ -21,6 +21,7 @@ class Scheduler:
             data: 시뮬레이션에 필요한 데이터 딕셔너리
             event_logger: 이벤트 기록 인스턴스
             algorithm: 작업과 머신 매칭 알고리즘 (기본값: None)
+            pm_hazard_threshold: PM 고장 확률 임계값
         """
         self.__algorithm = algorithm
         self.__env = env
@@ -56,11 +57,12 @@ class Scheduler:
                 failure_info=failure_info,
                 setup_time_info=setup_time_info,
                 process_time_info=process_time_info,
+                pm_hazard_threshold=pm_hazard_threshold,
                 event_logger=event_logger,
                 event_queue=self.machine_events
             )
             machine.down_process = env.process(machine.down())
-            machine.pm_process = env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else float(os.getenv('DEFAULT_PM_TIME', 30))))
+            machine.pm_process = env.process(machine.PM())
             machine.run_process = env.process(machine.run())
             self.__machines.append(machine)
         env.process(self.__chk_machine_event())
@@ -112,7 +114,7 @@ class Scheduler:
         elif status == Machine.RepairStatus.FAILED_PM:
             return
         machine.down_process = self.__env.process(machine.down())
-        machine.pm_process = self.__env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else float(os.getenv('DEFAULT_PM_TIME', 30))))
+        machine.pm_process = self.__env.process(machine.PM())
 
     def __chk_job_waiting(self, num_jobs: int):
         """

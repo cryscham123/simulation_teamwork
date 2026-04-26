@@ -19,16 +19,3 @@ class Algorithm(ABC):
             Machine: 매칭된 머신 인스턴스
         """
         pass
-
-    @abstractmethod
-    def calculate_PM_time(self, machine: Machine) -> float:
-        """
-        주어진 머신에 대한 예방 보전 시간 계산
-
-        Args:
-            machine: 예방 보전을 수행할 머신 인스턴스
-
-        Returns:
-            float: 다음 예방 보전까지 남은 시간
-        """
-        pass
