@@ -6,11 +6,8 @@ import pandas as pd
 from typing import Dict, Any
 from utils import EventLogger
 from enum import Enum
-<<<<<<< HEAD
-=======
 from .job import Job
 import os
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
 
 class Machine:
     class State(Enum):
@@ -20,13 +17,10 @@ class Machine:
         REPAIRING = 3
         PM = 4
 
-<<<<<<< HEAD
-=======
     class RepairStatus(Enum):
         SUCCESS_PM = 0
         FAILED_PM = 1
 
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
     def __init__(self, env: simpy.Environment, id: int, group: str,
                  failure_info: Dict[str, Any], setup_time_info: pd.DataFrame,
                  process_time_info: pd.DataFrame, pm_hazard_threshold: float,
@@ -49,10 +43,7 @@ class Machine:
         self.__id = id
         self.group = group
         self.__event_logger = event_logger
-<<<<<<< HEAD
-=======
         self.__event_queue = event_queue
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
 
         self.__resource = simpy.PreemptiveResource(env, capacity=1)
         self.__queue = simpy.FilterStore(env, capacity=float('inf'))
@@ -71,37 +62,24 @@ class Machine:
         # 머신 상태
         self.__last_job_type = None
         self.__event_idx = -1
-<<<<<<< HEAD
-=======
         self.__repair_idx = -1
         self.__PM_idx = -1
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
         self.cur_state = Machine.State.IDLE
         self.down_process = None
         self.pm_process = None
         self.run_process = None
-<<<<<<< HEAD
-
-    def __del__(self):
-        self.__event_logger.log_event_finish(self.__event_idx)
-=======
         self.repair_process = None
 
     def __del__(self):
         self.__event_logger.log_event_finish(self.__event_idx)
         self.__event_logger.log_event_finish(self.__PM_idx)
         self.__event_logger.log_event_finish(self.__repair_idx)
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
 
     @property
     def id(self) -> int:
         """머신 ID 반환"""
         return self.__id
 
-<<<<<<< HEAD
-    def calculate_hazard(self):
-        """일단은 남겨 놓음. rule-based 알고리즘에 옮겨주길 바람."""
-=======
     @property
     def queue(self) -> simpy.FilterStore:
         """머신 대기열 반환"""
@@ -121,7 +99,6 @@ class Machine:
         """
         if os.getenv('DOWN_ACTIVE', 'True').lower() == 'false':
             return inf
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
         h0 = self.__base_hazard
         hr = self.__hazard_increase_rate
         u = random.random()
@@ -132,45 +109,9 @@ class Machine:
             return -math.log(u) / h0
         return inf
 
-    def down(self, time_to_fail: float):
+    def down(self):
         """머신 중단 프로세스"""
         try:
-<<<<<<< HEAD
-            # 머신 고장
-            yield self.__env.timeout(time_to_fail)
-            if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
-                return self
-            self.cur_state = Machine.State.REPAIRING
-        except simpy.Interrupt:
-            # 예방 보전 성공으로 인한 인터럽트 발생
-            pass
-        return self
-
-    def PM(self, time_to_PM: float):
-        """예방 보전 프로세스"""
-        try:
-            yield self.__env.timeout(time_to_PM)
-            if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
-                return self
-            # 예방 보전 시작 전, 현재 작업이 있다면 완료될 때까지 대기
-            if self.cur_state != Machine.State.IDLE:
-                yield self.run_process
-            self.cur_state = Machine.State.PM
-        except simpy.Interrupt:
-            # 머신 고장으로 인한 인터럽트 발생
-            pass
-        return self
-
-    def repair(self):
-        """머신 수리 프로세스"""
-        reason, time = ('repairing', self.__repair_time) if self.cur_state == Machine.State.REPAIRING else ('PM', self.__pm_duration)
-        idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None)
-        yield self.__env.timeout(time)
-        self.__event_logger.log_event_finish(idx)
-        # 수리시 setup 정보도 초기화
-        self.cur_state = Machine.State.IDLE
-        self.__last_job_type = None
-=======
             yield self.__env.timeout(self.__calculate_hazard())
             if self.cur_state == Machine.State.REPAIRING:
                 return
@@ -233,7 +174,6 @@ class Machine:
             self.__event_logger.log_event_finish(self.__repair_idx)
             self.__repair_idx = -1
         return ret
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
 
     def is_idle(self) -> bool:
         """
@@ -284,17 +224,6 @@ class Machine:
         Args:
             criteria: 작업 선택 기준
         """
-<<<<<<< HEAD
-        self.cur_state = Machine.State.SETUP
-        self.__event_idx = -1
-        try:
-            self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', f'job: {job_id}\noperation: {op_id}')
-            yield self.__env.timeout(self.get_setup_time(job_type))
-            self.__event_logger.log_event_finish(self.__event_idx)
-            self.__last_job_type = job_type
-        except simpy.Interrupt:
-            self.__event_logger.log_event_finish(self.__event_idx)
-=======
         while True:
             is_completed = False
             job = None
@@ -305,7 +234,6 @@ class Machine:
                     yield req
                     job.waiting_end()
                     op_id = job.get_current_operation()
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
 
                     self.cur_state = Machine.State.SETUP
                     job.set_state(Job.State.SETUP)
@@ -314,21 +242,6 @@ class Machine:
                     self.__last_job_type = job.job_type
                     self.__event_logger.log_event_finish(self.__event_idx)
 
-<<<<<<< HEAD
-        Args:
-            op_id: 오퍼레이션 ID
-            job_id: 작업 ID
-        """
-        self.cur_state = Machine.State.WORKING
-        process_time = self.get_process_time(op_id)
-        try:
-            self.__event_idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job_id}\noperation: {op_id}')
-            yield self.__env.timeout(process_time)
-            self.__event_logger.log_event_finish(self.__event_idx)
-            self.cur_state = Machine.State.IDLE
-        except simpy.Interrupt:
-            self.__event_logger.log_event_finish(self.__event_idx)
-=======
                     job.interrupt_qtime()
 
                     self.cur_state = Machine.State.WORKING
@@ -347,4 +260,3 @@ class Machine:
             if job is not None:
                 job.operation_end_signal.put(is_completed)
             self.__event_idx = -1
->>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
