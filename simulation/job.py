@@ -1,8 +1,8 @@
-from numpy import inf
 import simpy
 import pandas as pd
 from typing import Dict, Any
 from enum import Enum
+from utils import EventLogger
 
 class Job:
     class State(Enum):
@@ -13,7 +13,7 @@ class Job:
         COMPLETED = 4
 
     def __init__(self, env: simpy.Environment, job_info: Dict[str, Any],
-                 op_info: pd.DataFrame, event_queue: simpy.Store):
+                 op_info: pd.DataFrame, event_logger: EventLogger, event_queue: simpy.Store):
         """
         Job 초기화
 
@@ -21,17 +21,19 @@ class Job:
             env: SimPy 환경
             job_info: 작업 정보 딕셔너리
             op_info: 작업 operation 정보 DataFrame
+            event_logger: 이벤트 기록 인스턴스
             event_queue: 작업 이벤트를 기록할 queue
         """
         self.__env = env
         self.__id = job_info['job_id']
+        self.__event_logger = event_logger
         self.__event_queue = event_queue
         self.__job_type = job_info['job_type']
         self.__release_time = job_info['release_time']
         self.__due_date = job_info['due_date']
         self.__priority = job_info['priority']
         self.__qtime = op_info['qtime'].astype(float).values
-        self.__qtime[0] = float(inf) # 첫 번째 operation에 대한 qtime은 고려하지 않는다.
+        self.__qtime[0] = float('inf') # 첫 번째 operation에 대한 qtime은 고려하지 않는다.
         self.__op_seq = op_info[['op_id', 'op_seq']].values
         self.__op_group = op_info[['op_group', 'op_seq']].values
         self.__completed_time = 0.0
@@ -42,6 +44,7 @@ class Job:
         self.__qtime_process = None
         self.__waiting_start_time = 0.0
         self.__total_waiting_time = 0.0
+        self.__cur_event_idx = -1
         self.operation_end_signal = simpy.Store(env)
         self.cur_state = Job.State.UNRELEASED
 
@@ -132,17 +135,25 @@ class Job:
         self.cur_state = self.State.WAITING
         self.__waiting_start_time = self.__env.now
         self.__event_queue.put(self)
+        self.__cur_event_idx = self.__event_logger.log_event_start(id=self.id, event='waiting', resource='job')
 
     def waiting_end(self):
         self.__total_waiting_time += self.__env.now - self.__waiting_start_time
 
+    def set_state(self, state: State):
+        self.cur_state = state
+        self.__event_logger.log_event_finish(self.__cur_event_idx)
+        self.__cur_event_idx = self.__event_logger.log_event_start(id=self.id, event='setup' if state == Job.State.SETUP else 'working', resource='job')
+
     def operation_completed(self):
         is_completed = yield self.operation_end_signal.get()
         self.__cur_seq += int(is_completed)
+        self.__event_logger.log_event_finish(self.__cur_event_idx)
         if self.__cur_seq >= len(self.__op_seq):
             self.cur_state = self.State.COMPLETED
             self.__completed_time = self.__env.now
         else:
             self.cur_state = self.State.WAITING
             self.__waiting_start_time = self.__env.now
+            self.__cur_event_idx = self.__event_logger.log_event_start(id=self.id, event='waiting', resource='job')
         self.__event_queue.put(self)

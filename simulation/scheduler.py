@@ -59,9 +59,9 @@ class Scheduler:
                 event_logger=event_logger,
                 event_queue=self.machine_events
             )
-            machine.down_process = env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else machine.calculate_hazard()))
+            machine.down_process = env.process(machine.down())
             machine.pm_process = env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else float(os.getenv('DEFAULT_PM_TIME', 30))))
-            machine.run_process = env.process(machine.run(self.__algorithm.get_job_criteria_score if self.__algorithm else None))
+            machine.run_process = env.process(machine.run())
             self.__machines.append(machine)
         env.process(self.__chk_machine_event())
 
@@ -77,6 +77,7 @@ class Scheduler:
                 env=env,
                 job_info=job_info.to_dict(),
                 op_info=job_operations,
+                event_logger=event_logger,
                 event_queue=self.job_events
             )
             self.__jobs.append(job)
@@ -110,7 +111,7 @@ class Scheduler:
             machine.down_process.interrupt()
         elif status == Machine.RepairStatus.FAILED_PM:
             return
-        machine.down_process = self.__env.process(machine.down(self.__algorithm.calculate_down_time(machine) if self.__algorithm else machine.calculate_hazard()))
+        machine.down_process = self.__env.process(machine.down())
         machine.pm_process = self.__env.process(machine.PM(self.__algorithm.calculate_PM_time(machine) if self.__algorithm else float(os.getenv('DEFAULT_PM_TIME', 30))))
 
     def __chk_job_waiting(self, num_jobs: int):
