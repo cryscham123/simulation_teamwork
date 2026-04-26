@@ -26,4 +26,5 @@ class Rule1(Algorithm):
         # 얘는 뭐에 쓰임?
         _is_urgent = job.get_remain_qtime() < urgency_threshold
 
-        return min(candidates, key=lambda m: m.get_setup_time(job.job_type) + m.get_process_time(op_id) + 999999 * int(not m.is_idle()))
+        # 작업이 언제 시작할 지 모르기 때문에, setup time은 정확하지 않음.
+        return min(candidates, key=lambda m: m.get_process_time(op_id) + 1000000000000000 * (int(not m.is_idle()) + m.queue_size()))

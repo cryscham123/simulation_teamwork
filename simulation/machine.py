@@ -45,7 +45,7 @@ class Machine:
         self.__event_queue = event_queue
 
         self.__resource = simpy.PreemptiveResource(env, capacity=1)
-        self.__queue = simpy.FilterStore(env, capacity=1)
+        self.__queue = simpy.FilterStore(env, capacity=float('inf'))
 
         # 고장 관련 파라미터
         self.__base_hazard = failure_info['base_hazard']
@@ -101,7 +101,7 @@ class Machine:
         u = random.random()
 
         if hr > 0:
-            return (-h0 + math.sqrt(h0 ** 2 - 2 * hr * math.log(u))) / hr
+            return (-h0 + math.sqrt((h0 ** 2) - 2 * hr * math.log(u))) / hr
         if h0 > 0:
             return -math.log(u) / h0
         return inf
@@ -123,12 +123,11 @@ class Machine:
         hr = self.__hazard_increase_rate
         thr = self.__pm_hazard_threshold
         if hr > 0:
-            t_star = (-h0 + math.sqrt(h0 * h0 + 2.0 * hr * thr)) / hr
+            t_star = (-h0 + math.sqrt((h0 ** 2) + 2.0 * hr * thr)) / hr
         elif h0 > 0:
             t_star = thr / h0
         else:
             t_star = inf
-        self.next_pm_time = self.__env.now + t_star
         return t_star
 
     def PM(self):
@@ -151,6 +150,7 @@ class Machine:
         try:
             with self.__resource.request(priority=priority, preempt=preempt) as req:
                 yield req
+                self.__last_job_type = None
                 if reason == 'PM':
                     self.cur_state = Machine.State.PM
                     self.__PM_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None)
@@ -159,7 +159,6 @@ class Machine:
                 yield self.__env.timeout(time)
                 # 수리시 setup 정보도 초기화
                 self.cur_state = Machine.State.IDLE
-                self.__last_job_type = None
                 ret = self.RepairStatus.SUCCESS_PM if reason == 'PM' else None
         except simpy.Interrupt:
             ret = self.RepairStatus.FAILED_PM if reason == 'PM' else None
