@@ -1,3 +1,4 @@
+from numba.cuda import target
 import pandas as pd
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
@@ -31,7 +32,11 @@ def create_gantt_chart(logs: List[Any],
                 'Task': id,
                 'Start': event['start'],
                 'Finish': event['finish'],
+<<<<<<< HEAD
                 'Resource': f"{event['event']}-{job_id}" if event['event'] == 'working' else event['event'],
+=======
+                'Resource': f"{event['event']}-{job_id}" if event['event'] == 'working' and event['resource'] == 'machine' else event['event'],
+>>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
                 'Description': f"{event['description']}"
             })
 
@@ -43,12 +48,23 @@ def create_gantt_chart(logs: List[Any],
             colors[resource] = 'rgb(220, 220, 220)'  # 밝은 회색
         elif resource == "setup":
             colors[resource] = 'rgb(0, 200, 83)' # 초록색
+<<<<<<< HEAD
         elif "working" in resource:
             colors[resource] = f'rgb(0, {200 - int(resource.split("-")[1][1:]) * 20}, 255)'  # 파란색 계열
         elif resource == "repairing":
             colors[resource] = 'rgb(255, 65, 54)'  # 빨간색
         else:
             colors[resource] = 'rgb(255, 140, 0)'  # 주황색
+=======
+        elif "working-" in resource:
+            colors[resource] = f'rgb(0, {200 - int(resource.split("-")[1][1:]) * 20}, 255)'  # 파란색 계열
+        elif resource == "repairing":
+            colors[resource] = 'rgb(255, 65, 54)'  # 빨간색
+        elif resource == "PM":
+            colors[resource] = 'rgb(255, 140, 0)'  # 주황색
+        else:
+            colors[resource] = 'rgb(0, 0, 255)'
+>>>>>>> 6185f83d82842ea7e1a063936b093a0ace729e47
 
     fig = ff.create_gantt(
         df_gantt,
