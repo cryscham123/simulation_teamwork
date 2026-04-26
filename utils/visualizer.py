@@ -32,7 +32,7 @@ def create_gantt_chart(logs: List[Any],
                 'Task': id,
                 'Start': event['start'],
                 'Finish': event['finish'],
-                'Resource': f"{event['event']}-{job_id}" if event['event'] == 'working' else event['event'],
+                'Resource': f"{event['event']}-{job_id}" if event['event'] == 'working' and event['resource'] == 'machine' else event['event'],
                 'Description': f"{event['description']}"
             })
 
@@ -44,12 +44,14 @@ def create_gantt_chart(logs: List[Any],
             colors[resource] = 'rgb(220, 220, 220)'  # 밝은 회색
         elif resource == "setup":
             colors[resource] = 'rgb(0, 200, 83)' # 초록색
-        elif "working" in resource:
+        elif "working-" in resource:
             colors[resource] = f'rgb(0, {200 - int(resource.split("-")[1][1:]) * 20}, 255)'  # 파란색 계열
         elif resource == "repairing":
             colors[resource] = 'rgb(255, 65, 54)'  # 빨간색
-        else:
+        elif resource == "PM":
             colors[resource] = 'rgb(255, 140, 0)'  # 주황색
+        else:
+            colors[resource] = 'rgb(0, 0, 255)'
 
     fig = ff.create_gantt(
         df_gantt,
@@ -61,11 +63,12 @@ def create_gantt_chart(logs: List[Any],
         showgrid_y=True,
         title=title,
     )
-    target_order = ["repairing", "PM", "waiting", "setup"]
+    jobs = df_events[df_events['resource'] == 'job']['id'].sort_values().unique()
+    target_order = ["repairing", "PM", "waiting", "setup"] + [f"working-{i}" for i in jobs]
 
     fig.data = sorted(
         fig.data, 
-        key=lambda x: target_order.index(x.name) if x.name in target_order else len(target_order) + int(x.name.split("-")[1][1:]) if "working" in x.name else len(target_order) + 100
+        key=lambda x: target_order.index(x.name) if x.name in target_order else 999
     )
 
     fig.update_layout(

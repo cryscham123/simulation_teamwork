@@ -1,4 +1,5 @@
 import simpy
+from math import inf
 import random
 import math
 import pandas as pd
@@ -6,7 +7,6 @@ from typing import Dict, Any
 from utils import EventLogger
 from enum import Enum
 from .job import Job
-import os
 
 class Machine:
     class State(Enum):
@@ -44,8 +44,7 @@ class Machine:
         self.__event_queue = event_queue
 
         self.__resource = simpy.PreemptiveResource(env, capacity=1)
-        # 대기열은 무제한으로 가정.
-        self.__queue = simpy.FilterStore(env, capacity=float(os.getenv('MACHINE_QUEUE_CAPACITY', 'inf')))
+        self.__queue = simpy.FilterStore(env, capacity=1)
 
         # 고장 관련 파라미터
         self.__base_hazard = failure_info['base_hazard']
@@ -90,17 +89,25 @@ class Machine:
     def queue_size(self):
         return len(self.__queue.items)
 
-    def calculate_hazard(self):
+    def __calculate_hazard(self):
+        """
+        기존 base.py에서 처리하던걸 다시 machine으로 이관.
+        csv 값을 통해 원하는 동작 처리 가능
+        """
         h0 = self.__base_hazard
         hr = self.__hazard_increase_rate
         u = random.random()
 
-        return (-h0 + math.sqrt(h0**2 - 2*hr*math.log(u))) / hr
+        if hr > 0:
+            return (-h0 + math.sqrt(h0 ** 2 - 2 * hr * math.log(u))) / hr
+        if h0 > 0:
+            return -math.log(u) / h0
+        return inf
 
-    def down(self, time_to_fail: float):
+    def down(self):
         """머신 중단 프로세스"""
         try:
-            yield self.__env.timeout(time_to_fail)
+            yield self.__env.timeout(self.__calculate_hazard())
             if self.cur_state == Machine.State.REPAIRING:
                 return
             self.cur_state = Machine.State.REPAIRING
@@ -191,7 +198,7 @@ class Machine:
         ]
         return process_time_row['process_time'].iloc[0]
 
-    def run(self, criteria):
+    def run(self):
         """
         머신의 메인 프로세스
 
@@ -202,11 +209,7 @@ class Machine:
             is_completed = False
             job = None
             try:
-                # queue가 비어있으면 제일 빨리 도착하는 작업 선택
-                # 그렇지 않을 경우 우선순위가 가장 높은 작업 선택
-                if criteria is not None:
-                    self.__queue.items.sort(key=lambda x: criteria(x, self), reverse=True)
-                # 이 부분이 이상해 보일 수 있는데, simpy get 메소드가 interrupt 발생 시 동작이 이상해지는 경우가 있어서 밖으로 뺐음.
+                # machine이 job을 고르지 않음. FIFO로 처리됨.
                 job = yield self.__queue.get()
                 with self.__resource.request(priority=0, preempt=False) as req:
                     yield req
@@ -214,6 +217,7 @@ class Machine:
                     op_id = job.get_current_operation()
 
                     self.cur_state = Machine.State.SETUP
+                    job.set_state(Job.State.SETUP)
                     self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', f'job: {job.id}\noperation: {op_id}')
                     yield self.__env.timeout(self.get_setup_time(job.job_type))
                     self.__last_job_type = job.job_type
@@ -222,6 +226,7 @@ class Machine:
                     job.interrupt_qtime()
 
                     self.cur_state = Machine.State.WORKING
+                    job.set_state(Job.State.WORKING)
                     self.__event_idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job.id}\noperation: {op_id}')
                     yield self.__env.timeout(self.get_process_time(op_id))
 
@@ -232,10 +237,6 @@ class Machine:
                 self.__queue.items.clear()
                 for item in items:
                     item.operation_end_signal.put(False)
-                # self.__gueue.get()을 밖으로 뺐기 때문에, 고장이 발생했을 때 수리가 완료되기까지 기다렸다가 대기열의 작업을 빼오기 위해 아래처럼 짬.
-                self.__event_logger.log_event_finish(self.__event_idx)
-                self.__event_idx = -1
-                yield self.repair_process
             self.__event_logger.log_event_finish(self.__event_idx)
             if job is not None:
                 job.operation_end_signal.put(is_completed)
