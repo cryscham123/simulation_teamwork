@@ -94,26 +94,29 @@ class Scheduler:
         머신 고장 체크 프로세스
         """
         while True:
-            machine = yield self.machine_events.get()
-            if machine.cur_state == Machine.State.REPAIRING:
+            machine, required_state = yield self.machine_events.get()
+            if required_state == Machine.State.REPAIRING:
+                if machine.cur_state == Machine.State.PM:
+                    continue
                 if machine.pm_process.is_alive:
                     machine.pm_process.interrupt()
                 if machine.repair_process is not None and machine.repair_process.is_alive:
                     machine.repair_process.interrupt()
-            self.__env.process(self.__repair_and_reschedule_machine(machine))
+            self.__env.process(self.__repair_and_reschedule_machine(machine, required_state))
 
-    def __repair_and_reschedule_machine(self, machine: Machine):
+    def __repair_and_reschedule_machine(self, machine: Machine, required_state: Machine.State):
         """
         머신 수리 프로세스
 
         Args:
             machine: 수리할 머신
         """
-        machine.repair_process = self.__env.process(machine.repair())
+        machine.repair_process = self.__env.process(machine.repair(required_state))
         status = yield machine.repair_process
         # PM에 성공하면 머신 고장 확률 초기화
         if status == Machine.RepairStatus.SUCCESS_PM:
-            machine.down_process.interrupt()
+            if machine.down_process.is_alive:
+                machine.down_process.interrupt()
         elif status == Machine.RepairStatus.FAILED_PM:
             return
         machine.down_process = self.__env.process(machine.down())
