@@ -42,8 +42,6 @@ class Job:
         self.__cur_seq = 0
         self.__is_over_qtime = False
         self.__qtime_process = None
-        self.__waiting_start_time = 0.0
-        self.__total_waiting_time = 0.0
         self.__cur_event_idx = -1
         self.operation_end_signal = simpy.Store(env)
         self.cur_state = Job.State.UNRELEASED
@@ -52,9 +50,12 @@ class Job:
         self.__qtime_over_time_start = 0.0
         self.total_qtime_over = 0.0
 
-    def __del__(self):
-        if self.__is_over_qtime:
-            self.total_qtime_over += self.__env.now - self.__qtime_over_time_start
+    def program_done(self):
+        """
+        소멸자가 동작 안해서 명시적으로 프로그램 종료 함수 만듦
+        정확히 측정되지 않은 qtime 오버시간은 추가 반영 안함.
+        """
+        self.__event_logger.log_event_finish(self.__cur_event_idx)
 
     @property
     def id(self):
@@ -133,12 +134,8 @@ class Job:
     def release(self):
         yield self.__env.timeout(self.__release_time)
         self.cur_state = self.State.WAITING
-        self.__waiting_start_time = self.__env.now
         self.__event_queue.put(self)
         self.__cur_event_idx = self.__event_logger.log_event_start(id=self.id, event='waiting', resource='job')
-
-    def waiting_end(self):
-        self.__total_waiting_time += self.__env.now - self.__waiting_start_time
 
     def set_state(self, state: State):
         self.cur_state = state
@@ -152,8 +149,8 @@ class Job:
         if self.__cur_seq >= len(self.__op_seq):
             self.cur_state = self.State.COMPLETED
             self.__completed_time = self.__env.now
+            self.__cur_event_idx = -1
         else:
             self.cur_state = self.State.WAITING
-            self.__waiting_start_time = self.__env.now
             self.__cur_event_idx = self.__event_logger.log_event_start(id=self.id, event='waiting', resource='job')
         self.__event_queue.put(self)
