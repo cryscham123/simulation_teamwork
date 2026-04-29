@@ -70,7 +70,10 @@ class Machine:
         self.run_process = None
         self.repair_process = None
 
-    def __del__(self):
+    def program_done(self):
+        """
+        소멸자가 작동 안해서 그냥 명시적으로 머신이 소멸될 때 호출하는 함수 따로 만듦
+        """
         self.__event_logger.log_event_finish(self.__event_idx)
         self.__event_logger.log_event_finish(self.__PM_idx)
         self.__event_logger.log_event_finish(self.__repair_idx)
@@ -112,14 +115,14 @@ class Machine:
     def down(self):
         """머신 중단 프로세스"""
         try:
-            yield self.__env.timeout(self.__calculate_hazard())
-            if self.cur_state == Machine.State.REPAIRING:
+            down_time = self.__calculate_hazard()
+            yield self.__env.timeout(down_time)
+            if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
                 return
-            self.cur_state = Machine.State.REPAIRING
         except simpy.Interrupt:
             # 예방 보전 성공으로 인한 인터럽트 발생
             return
-        self.__event_queue.put(self)
+        self.__event_queue.put((self, Machine.State.REPAIRING))
 
     def __calculate_PM_time(self):
         if os.getenv('PM_ACTIVE', 'True').lower() == 'false':
@@ -144,22 +147,23 @@ class Machine:
         except simpy.Interrupt:
             # 머신 고장으로 인한 인터럽트 발생
             return
-        self.__event_queue.put(self)
+        self.__event_queue.put((self, Machine.State.PM))
 
-    def repair(self):
+    def repair(self, required: State):
         """
         머신 수리 프로세스
         나중에 리팩토링 예정.
         """
-        priority, preempt, reason, time = (-2, True, 'repairing', self.__repair_time) if self.cur_state == Machine.State.REPAIRING else (-1, False, 'PM', self.__pm_duration)
+        preempt, reason, time = (True, 'repairing', self.__repair_time) if required == Machine.State.REPAIRING else (False, 'PM', self.__pm_duration)
         try:
-            with self.__resource.request(priority=priority, preempt=preempt) as req:
+            with self.__resource.request(priority=-1, preempt=preempt) as req:
                 yield req
                 self.__last_job_type = None
                 if reason == 'PM':
                     self.cur_state = Machine.State.PM
                     self.__PM_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None)
                 else:
+                    self.cur_state = Machine.State.REPAIRING
                     self.__repair_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None)
                 yield self.__env.timeout(time)
                 # 수리시 setup 정보도 초기화
@@ -232,7 +236,6 @@ class Machine:
                 job = yield self.__queue.get()
                 with self.__resource.request(priority=0, preempt=False) as req:
                     yield req
-                    job.waiting_end()
                     op_id = job.get_current_operation()
 
                     self.cur_state = Machine.State.SETUP

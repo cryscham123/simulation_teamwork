@@ -95,26 +95,29 @@ class Scheduler:
         머신 고장 체크 프로세스
         """
         while True:
-            machine = yield self.machine_events.get()
-            if machine.cur_state == Machine.State.REPAIRING:
+            machine, required_state = yield self.machine_events.get()
+            if required_state == Machine.State.REPAIRING:
+                if machine.cur_state == Machine.State.PM:
+                    continue
                 if machine.pm_process.is_alive:
                     machine.pm_process.interrupt()
                 if machine.repair_process is not None and machine.repair_process.is_alive:
                     machine.repair_process.interrupt()
-            self.__env.process(self.__repair_and_reschedule_machine(machine))
+            self.__env.process(self.__repair_and_reschedule_machine(machine, required_state))
 
-    def __repair_and_reschedule_machine(self, machine: Machine):
+    def __repair_and_reschedule_machine(self, machine: Machine, required_state: Machine.State):
         """
         머신 수리 프로세스
 
         Args:
             machine: 수리할 머신
         """
-        machine.repair_process = self.__env.process(machine.repair())
+        machine.repair_process = self.__env.process(machine.repair(required_state))
         status = yield machine.repair_process
         # PM에 성공하면 머신 고장 확률 초기화
         if status == Machine.RepairStatus.SUCCESS_PM:
-            machine.down_process.interrupt()
+            if machine.down_process.is_alive:
+                machine.down_process.interrupt()
         elif status == Machine.RepairStatus.FAILED_PM:
             return
         machine.down_process = self.__env.process(machine.down())
@@ -133,6 +136,10 @@ class Scheduler:
                 continue
             # 작업 대기 상태 혹은 대기, 세팅, 작업 도중 기계 고장 시 다시 매칭 시도
             self.__env.process(self.__matching_machine(job))
+        for machine in self.__machines:
+            machine.program_done()
+        for job in self.__jobs:
+            job.program_done()
 
     def __matching_machine(self, job: Job):
         """
@@ -186,11 +193,9 @@ class Scheduler:
         completed_cnt = 0
         completed_in_due_date = 0
         total_qtime_violation = 0.0
-        total_waiting_time = 0.0
         for job in self.__jobs:
-            print(f"Job ID: {job.id}\tQTime Violation: {round(job.total_qtime_over, 3)}\t대기 시간: {round(job.total_waiting_time, 3)}\t완료 시간: {round(job.completed_time, 3) if job.completed_time > 0.0 else '미완료'}")
+            print(f"Job ID: {job.id}\tQTime Violation: {round(job.total_qtime_over, 3)}\t완료 시간: {round(job.completed_time, 3) if job.completed_time > 0.0 else '미완료'}")
             completed_cnt += int(job.completed_time > 0.0)
             completed_in_due_date = int(job.is_in_due_date())
             total_qtime_violation += job.total_qtime_over
-            total_waiting_time += job.total_waiting_time
-        print(f"시뮬레이션 시간: {round(self.__env.now, 3)}\n총 작업 수: {len(self.__jobs)}\n완료된 작업 수: {completed_cnt}\n기한 안에 완료된 작업 수: {completed_in_due_date}\n총 QTime 위반 시간: {round(total_qtime_violation, 3)}\n총 대기 시간: {round(total_waiting_time, 3)}")
+        print(f"시뮬레이션 시간: {round(self.__env.now, 3)}\n총 작업 수: {len(self.__jobs)}\n완료된 작업 수: {completed_cnt}\n기한 안에 완료된 작업 수: {completed_in_due_date}\n총 QTime 위반 시간: {round(total_qtime_violation, 3)}")
