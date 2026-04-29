@@ -70,7 +70,10 @@ class Machine:
         self.run_process = None
         self.repair_process = None
 
-    def __del__(self):
+    def program_done(self):
+        """
+        소멸자가 작동 안해서 그냥 명시적으로 머신이 소멸될 때 호출하는 함수 따로 만듦
+        """
         self.__event_logger.log_event_finish(self.__event_idx)
         self.__event_logger.log_event_finish(self.__PM_idx)
         self.__event_logger.log_event_finish(self.__repair_idx)
@@ -112,7 +115,8 @@ class Machine:
     def down(self):
         """머신 중단 프로세스"""
         try:
-            yield self.__env.timeout(self.__calculate_hazard())
+            down_time = self.__calculate_hazard()
+            yield self.__env.timeout(down_time)
             if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
                 return
         except simpy.Interrupt:
@@ -232,7 +236,6 @@ class Machine:
                 job = yield self.__queue.get()
                 with self.__resource.request(priority=0, preempt=False) as req:
                     yield req
-                    job.waiting_end()
                     op_id = job.get_current_operation()
 
                     self.cur_state = Machine.State.SETUP
