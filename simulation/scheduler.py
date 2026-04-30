@@ -4,6 +4,7 @@ from .machine import Machine
 from utils import EventLogger
 from typing import Dict
 from .job import Job
+from .stocker import Stocker
 import random
 import os
 
@@ -29,7 +30,8 @@ class Scheduler:
         self.__env = env
         self.__qutime_urgency_factor = qtime_urgency_factor
         self.__machines = []
-        self.__machine_store = simpy.FilterStore(env, capacity=float('inf'))
+        self.machine_store = simpy.FilterStore(env, capacity=float('inf'))
+        self.machine_signal = simpy.Store(env, capacity=float('inf'))
         self.machine_events = simpy.Store(env, capacity=float('inf'))
 
         # 머신 인스턴스 생성 및 스토어에 추가
@@ -63,13 +65,16 @@ class Scheduler:
                 process_time_info=process_time_info,
                 pm_hazard_threshold=pm_hazard_threshold,
                 event_logger=event_logger,
-                event_queue=self.machine_events
+                event_queue=self.machine_events,
+                machine_signal=self.machine_signal,
+                machine_store=self.machine_store
             )
             machine.down_process = env.process(machine.down())
             machine.pm_process = env.process(machine.PM())
-            machine.run_process = env.process(machine.run())
             self.__machines.append(machine)
-            self.__machine_store.put(machine)
+            self.machine_store.put(machine)
+        self.__stocker = Stocker(env, self.machine_signal)
+        self.__machines.append(self.__stocker)
         env.process(self.__chk_machine_event())
 
         self.__jobs = []
@@ -123,7 +128,8 @@ class Scheduler:
             return
         machine.down_process = self.__env.process(machine.down())
         machine.pm_process = self.__env.process(machine.PM())
-        self.__machine_store.put(machine)
+        self.machine_store.put(machine)
+        self.machine_signal.put(machine)
 
     def __chk_job_waiting(self, num_jobs: int):
         """
@@ -151,11 +157,9 @@ class Scheduler:
             job: 매칭할 작업
         """
         job.start_qtime_chk()
-        target = yield self.__env.process(self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'random')))
-        yield target.put_job(job)
+        target = yield self.__env.process(self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'FIFO')))
+        self.__env.process(target.run(job))
         self.__env.process(job.operation_completed())
-        if target.required_state == Machine.State.IDLE:
-            self.__machine_store.put(target)
 
     def __match_job_machine(self, job: Job, machines: list, choice_method: str):
         """
@@ -164,31 +168,40 @@ class Scheduler:
         Args:
             job: 매칭할 작업
             machines: 머신 리스트
-            choice_method: 머신 선택 방법 (예: 'random', 'FIFO', 'shortest')
+            choice_method: 머신 선택 방법 (예: 'random', 'FIFO', 'SPT')
 
         Returns:
             Machine: 선택된 머신
         """
         if choice_method == 'random':
-            target = [x for x in self.__machines if x.group == job.get_op_group()]
-            return target[random.randint(0, len(target)-1)]
-        if choice_method == 'FIFO':
-            target = yield self.__machine_store.get(lambda x: x.group == job.get_op_group() and x.is_idle())
+            target = [
+                x for x in self.__machines
+                if x.group == job.get_op_group()
+                and x.is_idle()
+                and x.id != 'stocker'
+            ]
+            if len(target) == 0:
+                return self.__stocker
+            target = target[random.randint(0, len(target)-1)]
+            target.set_busy(True)
             return target
-        if choice_method == 'shortest':
+        if choice_method == 'FIFO':
+            # FIFO 방식에서는 Stocker class를 사용하지 않아도 논리적으로 capacity가 무한인 Stocker에 작업이 쌓이는 것과 같다.
+            target = yield self.machine_store.get(lambda x: x.group == job.get_op_group() and x.is_idle())
+            return target
+        if choice_method == 'SPT':
             candidates = [
                 m for m in machines
                 if m.group == job.get_op_group()
             ]
             op_id = job.get_current_operation()
-
-            avg_proc = sum(m.get_process_time(op_id) for m in candidates) / len(candidates)
-            urgency_threshold = avg_proc * self.__qutime_urgency_factor
-            # 얘는 뭐에 쓰임?
-            _is_urgent = job.get_remain_qtime() < urgency_threshold
-
             # 작업이 언제 시작할 지 모르기 때문에, setup time은 정확하지 않음.
-            return min(candidates, key=lambda m: m.get_process_time(op_id) + 1000000000000000 * (int(not m.is_idle()) + m.queue_size()))
+            target = min(candidates, key=lambda m: m.get_process_time(op_id)
+                + 100000000 * int(m.id == 'stocker')
+                + 1000000000000000 * int(not m.is_idle())
+            )
+            target.set_busy(True)
+            return target
         return None
 
     def get_simulation_info(self):
