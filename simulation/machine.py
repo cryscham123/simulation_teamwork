@@ -21,10 +21,11 @@ class Machine:
         SUCCESS_PM = 0
         FAILED_PM = 1
 
-    def __init__(self, env: simpy.Environment, id: int, group: str,
+    def __init__(self, env: simpy.Environment, id: str, group: str,
                  failure_info: Dict[str, Any], setup_time_info: pd.DataFrame,
                  process_time_info: pd.DataFrame, pm_hazard_threshold: float,
-                 event_logger: EventLogger, event_queue: simpy.Store):
+                 event_logger: EventLogger, event_queue: simpy.Store, machine_signal: simpy.Store,
+                 machine_store: simpy.FilterStore):
         """
         Machine 초기화
 
@@ -38,6 +39,8 @@ class Machine:
             pm_hazard_threshold: PM 고장 확률 임계값
             event_logger: 이벤트 기록 인스턴스
             event_queue: 머신 이벤트를 기록할 queue
+            machine_signal: 머신 상태 변화 신호를 위한 store
+            machine_store: 작업 완료를 인지하기 위한 machine store
         """
         self.__env = env
         self.__id = id
@@ -46,10 +49,6 @@ class Machine:
         self.__event_queue = event_queue
 
         self.__resource = simpy.PreemptiveResource(env, capacity=1)
-        # 해당 머신으로 들어오고자 하는 작업들의 시스템 대기열
-        self.__queue = simpy.Store(env, capacity=float('inf'))
-        self.input_port = simpy.Store(env, capacity=1)
-        self.output_port = simpy.Store(env, capacity=1)
 
         # 고장 관련 파라미터
         self.__base_hazard = failure_info['base_hazard']
@@ -71,8 +70,10 @@ class Machine:
         self.required_state = None
         self.down_process = None
         self.pm_process = None
-        self.run_process = None
         self.repair_process = None
+        self.machine_signal = machine_signal
+        self.machine_store = machine_store
+        self.preempt = False
 
     def program_done(self):
         """
@@ -83,16 +84,9 @@ class Machine:
         self.__event_logger.log_event_finish(self.__repair_idx)
 
     @property
-    def id(self) -> int:
+    def id(self) -> str:
         """머신 ID 반환"""
         return self.__id
-
-    def put_job(self, job: Job):
-        """작업을 머신의 대기열에 추가."""
-        return self.__queue.put(job)
-
-    def queue_size(self):
-        return len(self.__queue.items)
 
     def __calculate_hazard(self):
         """
@@ -186,7 +180,12 @@ class Machine:
         머신이 가용 가능한 상태인지 확인.
         수리중인지 아닌지를 판별하는 용도로 사용
         """
+        if self.preempt:
+            return False
         return self.__resource.count < self.__resource.capacity
+
+    def set_busy(self, status):
+        self.preempt = status
 
     def get_setup_time(self, job_type: str) -> float:
         """
@@ -223,45 +222,41 @@ class Machine:
         ]
         return process_time_row['process_time'].iloc[0]
 
-    def run(self):
+    def run(self, job):
         """
         머신의 메인 프로세스
 
         Args:
-            criteria: 작업 선택 기준
+            job: 머신에서 처리할 작업
         """
-        while True:
-            is_completed = False
-            job = None
-            try:
-                # machine이 job을 고르지 않음. FIFO로 처리됨.
-                job = yield self.__queue.get()
-                with self.__resource.request(priority=0, preempt=False) as req:
-                    yield req
-                    op_id = job.get_current_operation()
+        is_completed = False
+        try:
+            with self.__resource.request(priority=0, preempt=False) as req:
+                yield req
+                self.set_busy(False)
+                op_id = job.get_current_operation()
 
-                    self.cur_state = Machine.State.SETUP
-                    job.set_state(Job.State.SETUP)
-                    self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', f'job: {job.id}\noperation: {op_id}')
-                    yield self.__env.timeout(self.get_setup_time(job.job_type))
-                    self.__last_job_type = job.job_type
-                    self.__event_logger.log_event_finish(self.__event_idx)
+                self.cur_state = Machine.State.SETUP
+                job.set_state(Job.State.SETUP)
+                self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', f'job: {job.id}\noperation: {op_id}')
+                yield self.__env.timeout(self.get_setup_time(job.job_type))
+                self.__last_job_type = job.job_type
+                self.__event_logger.log_event_finish(self.__event_idx)
 
-                    job.interrupt_qtime()
+                job.interrupt_qtime()
 
-                    self.cur_state = Machine.State.WORKING
-                    job.set_state(Job.State.WORKING)
-                    self.__event_idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job.id}\noperation: {op_id}')
-                    yield self.__env.timeout(self.get_process_time(op_id))
+                self.cur_state = Machine.State.WORKING
+                job.set_state(Job.State.WORKING)
+                self.__event_idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job.id}\noperation: {op_id}')
+                yield self.__env.timeout(self.get_process_time(op_id))
 
-                    self.cur_state = Machine.State.IDLE
-                    is_completed = True
-            except simpy.Interrupt:
-                items = self.__queue.items.copy()
-                self.__queue.items.clear()
-                for item in items:
-                    item.operation_end_signal.put(False)
-            self.__event_logger.log_event_finish(self.__event_idx)
-            if job is not None:
-                job.operation_end_signal.put(is_completed)
-            self.__event_idx = -1
+                self.cur_state = Machine.State.IDLE
+                is_completed = True
+        except simpy.Interrupt:
+            pass
+        self.__event_logger.log_event_finish(self.__event_idx)
+        if job is not None:
+            job.operation_end_signal.put(is_completed)
+        self.__event_idx = -1
+        self.machine_signal.put(self)
+        self.machine_store.put(self)
