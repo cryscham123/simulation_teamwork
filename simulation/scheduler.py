@@ -29,6 +29,7 @@ class Scheduler:
         self.__env = env
         self.__qutime_urgency_factor = qtime_urgency_factor
         self.__machines = []
+        self.__machine_store = simpy.FilterStore(env, capacity=float('inf'))
         self.machine_events = simpy.Store(env, capacity=float('inf'))
 
         # 머신 인스턴스 생성 및 스토어에 추가
@@ -68,6 +69,7 @@ class Scheduler:
             machine.pm_process = env.process(machine.PM())
             machine.run_process = env.process(machine.run())
             self.__machines.append(machine)
+            self.__machine_store.put(machine)
         env.process(self.__chk_machine_event())
 
         self.__jobs = []
@@ -94,24 +96,24 @@ class Scheduler:
         머신 고장 체크 프로세스
         """
         while True:
-            machine, required_state = yield self.machine_events.get()
-            if required_state == Machine.State.REPAIRING:
+            machine = yield self.machine_events.get()
+            if machine.required_state == Machine.State.REPAIRING:
                 if machine.cur_state == Machine.State.PM:
                     continue
                 if machine.pm_process.is_alive:
                     machine.pm_process.interrupt()
                 if machine.repair_process is not None and machine.repair_process.is_alive:
                     machine.repair_process.interrupt()
-            self.__env.process(self.__repair_and_reschedule_machine(machine, required_state))
+            self.__env.process(self.__repair_and_reschedule_machine(machine))
 
-    def __repair_and_reschedule_machine(self, machine: Machine, required_state: Machine.State):
+    def __repair_and_reschedule_machine(self, machine: Machine):
         """
         머신 수리 프로세스
 
         Args:
             machine: 수리할 머신
         """
-        machine.repair_process = self.__env.process(machine.repair(required_state))
+        machine.repair_process = self.__env.process(machine.repair())
         status = yield machine.repair_process
         # PM에 성공하면 머신 고장 확률 초기화
         if status == Machine.RepairStatus.SUCCESS_PM:
@@ -121,6 +123,7 @@ class Scheduler:
             return
         machine.down_process = self.__env.process(machine.down())
         machine.pm_process = self.__env.process(machine.PM())
+        self.__machine_store.put(machine)
 
     def __chk_job_waiting(self, num_jobs: int):
         """
@@ -148,11 +151,11 @@ class Scheduler:
             job: 매칭할 작업
         """
         job.start_qtime_chk()
-        # 이 로직은 phase1에서 처리하도록 변경 예정
-        # 임시로 scheduler에서 처리되도록 구현한 상태
-        target = self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'random'))
+        target = yield self.__env.process(self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'random')))
         yield target.put_job(job)
         self.__env.process(job.operation_completed())
+        if target.required_state == Machine.State.IDLE:
+            self.__machine_store.put(target)
 
     def __match_job_machine(self, job: Job, machines: list, choice_method: str):
         """
@@ -161,15 +164,18 @@ class Scheduler:
         Args:
             job: 매칭할 작업
             machines: 머신 리스트
-            choice_method: 머신 선택 방법 (예: 'random', 'shortest')
+            choice_method: 머신 선택 방법 (예: 'random', 'FIFO', 'shortest')
 
         Returns:
             Machine: 선택된 머신
         """
         if choice_method == 'random':
             target = [x for x in self.__machines if x.group == job.get_op_group()]
-            target = target[random.randint(0, len(target)-1)]
-        else:
+            return target[random.randint(0, len(target)-1)]
+        if choice_method == 'FIFO':
+            target = yield self.__machine_store.get(lambda x: x.group == job.get_op_group() and x.is_idle())
+            return target
+        if choice_method == 'shortest':
             candidates = [
                 m for m in machines
                 if m.group == job.get_op_group()
@@ -183,6 +189,7 @@ class Scheduler:
 
             # 작업이 언제 시작할 지 모르기 때문에, setup time은 정확하지 않음.
             return min(candidates, key=lambda m: m.get_process_time(op_id) + 1000000000000000 * (int(not m.is_idle()) + m.queue_size()))
+        return None
 
     def get_simulation_info(self):
         """
