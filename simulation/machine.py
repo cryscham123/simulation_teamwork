@@ -156,10 +156,10 @@ class Machine:
                 self.__last_job_type = None
                 if reason == 'PM':
                     self.cur_state = Machine.State.PM
-                    self.__PM_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None)
+                    self.__PM_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None, None)
                 else:
                     self.cur_state = Machine.State.REPAIRING
-                    self.__repair_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None)
+                    self.__repair_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None, None)
                 yield self.__env.timeout(time)
                 # 수리시 setup 정보도 초기화
                 self.cur_state = Machine.State.IDLE
@@ -238,7 +238,10 @@ class Machine:
 
                 self.cur_state = Machine.State.SETUP
                 job.set_state(Job.State.SETUP)
-                self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', f'job: {job.id}\noperation: {op_id}')
+                self.__event_idx = self.__event_logger.log_event_start(self.__id, 
+                                                                       'setup', 
+                                                                       'machine', op_id,
+                                                                       f'job: {job.id}\noperation: {op_id}')
                 yield self.__env.timeout(self.get_setup_time(job.job_type))
                 self.__last_job_type = job.job_type
                 self.__event_logger.log_event_finish(self.__event_idx)
@@ -247,7 +250,10 @@ class Machine:
 
                 self.cur_state = Machine.State.WORKING
                 job.set_state(Job.State.WORKING)
-                self.__event_idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job.id}\noperation: {op_id}')
+                self.__event_idx = self.__event_logger.log_event_start(self.__id, 
+                                                                       'working', 
+                                                                       'machine', op_id,
+                                                                       f'job: {job.id}\noperation: {op_id}')
                 yield self.__env.timeout(self.get_process_time(op_id))
 
                 self.cur_state = Machine.State.IDLE
