@@ -46,7 +46,10 @@ class Machine:
         self.__event_queue = event_queue
 
         self.__resource = simpy.PreemptiveResource(env, capacity=1)
-        self.__queue = simpy.FilterStore(env, capacity=float('inf'))
+        # 해당 머신으로 들어오고자 하는 작업들의 시스템 대기열
+        self.__queue = simpy.Store(env, capacity=float('inf'))
+        self.input_port = simpy.Store(env, capacity=1)
+        self.output_port = simpy.Store(env, capacity=1)
 
         # 고장 관련 파라미터
         self.__base_hazard = failure_info['base_hazard']
@@ -65,6 +68,7 @@ class Machine:
         self.__repair_idx = -1
         self.__PM_idx = -1
         self.cur_state = Machine.State.IDLE
+        self.required_state = None
         self.down_process = None
         self.pm_process = None
         self.run_process = None
@@ -83,13 +87,8 @@ class Machine:
         """머신 ID 반환"""
         return self.__id
 
-    @property
-    def queue(self) -> simpy.FilterStore:
-        """머신 대기열 반환"""
-        return self.__queue
-
     def put_job(self, job: Job):
-        """작업을 머신의 대기열에 추가. 발음에 주의하자."""
+        """작업을 머신의 대기열에 추가."""
         return self.__queue.put(job)
 
     def queue_size(self):
@@ -122,7 +121,8 @@ class Machine:
         except simpy.Interrupt:
             # 예방 보전 성공으로 인한 인터럽트 발생
             return
-        self.__event_queue.put((self, Machine.State.REPAIRING))
+        self.required_state = Machine.State.REPAIRING
+        self.__event_queue.put(self)
 
     def __calculate_PM_time(self):
         if os.getenv('PM_ACTIVE', 'True').lower() == 'false':
@@ -147,14 +147,15 @@ class Machine:
         except simpy.Interrupt:
             # 머신 고장으로 인한 인터럽트 발생
             return
-        self.__event_queue.put((self, Machine.State.PM))
+        self.required_state = Machine.State.PM
+        self.__event_queue.put(self)
 
-    def repair(self, required: State):
+    def repair(self):
         """
         머신 수리 프로세스
         나중에 리팩토링 예정.
         """
-        preempt, reason, time = (True, 'repairing', self.__repair_time) if required == Machine.State.REPAIRING else (False, 'PM', self.__pm_duration)
+        preempt, reason, time = (True, 'repairing', self.__repair_time) if self.required_state == Machine.State.REPAIRING else (False, 'PM', self.__pm_duration)
         try:
             with self.__resource.request(priority=-1, preempt=preempt) as req:
                 yield req
@@ -177,6 +178,7 @@ class Machine:
         else:
             self.__event_logger.log_event_finish(self.__repair_idx)
             self.__repair_idx = -1
+        self.required_state = Machine.State.IDLE
         return ret
 
     def is_idle(self) -> bool:
