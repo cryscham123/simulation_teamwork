@@ -194,8 +194,9 @@ class Scheduler:
         completed_in_due_date = 0
         total_qtime_violation = 0.0
         for job in self.__jobs:
-            print(f"Job ID: {job.id}\tQTime Violation: {round(job.total_qtime_over, 3)}\t완료 시간: {round(job.completed_time, 3) if job.completed_time > 0.0 else '미완료'}")
+            completed_str = f"{round(job.completed_time, 3)}" if job.completed_time > 0.0 else "미완료"
+            print(f"Job ID: {job.id:<4} | QTime Violation: {round(job.total_qtime_over, 3):>8} | 완료 시간: {completed_str:>8} | Due Date 준수: {'O' if job.is_in_due_date() else 'X'}")
             completed_cnt += int(job.completed_time > 0.0)
-            completed_in_due_date = int(job.is_in_due_date())
+            completed_in_due_date += int(job.is_in_due_date())
             total_qtime_violation += job.total_qtime_over
         print(f"시뮬레이션 시간: {round(self.__env.now, 3)}\n총 작업 수: {len(self.__jobs)}\n완료된 작업 수: {completed_cnt}\n기한 안에 완료된 작업 수: {completed_in_due_date}\n총 QTime 위반 시간: {round(total_qtime_violation, 3)}")

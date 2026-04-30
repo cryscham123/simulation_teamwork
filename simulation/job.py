@@ -82,7 +82,7 @@ class Job:
         return self.__total_waiting_time
 
     def is_in_due_date(self):
-        return self.completed_time > 0.0 and self.__due_date < self.__completed_time
+        return self.completed_time > 0.0 and self.__completed_time <= self.__due_date
 
     def get_op_group(self):
         """
