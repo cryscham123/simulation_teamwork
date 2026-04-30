@@ -77,12 +77,8 @@ class Job:
     def priority(self):
         return self.__priority
 
-    @property
-    def total_waiting_time(self):
-        return self.__total_waiting_time
-
     def is_in_due_date(self):
-        return self.completed_time > 0.0 and self.__due_date < self.__completed_time
+        return self.completed_time > 0.0 and self.__due_date > self.__completed_time
 
     def get_op_group(self):
         """
@@ -135,12 +131,16 @@ class Job:
         yield self.__env.timeout(self.__release_time)
         self.cur_state = self.State.WAITING
         self.__event_queue.put(self)
-        self.__cur_event_idx = self.__event_logger.log_event_start(id=self.id, event='waiting', resource='job')
+        self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 
+                                                                   'waiting', 
+                                                                   'job', self.get_current_operation(), None)
 
     def set_state(self, state: State):
         self.cur_state = state
         self.__event_logger.log_event_finish(self.__cur_event_idx)
-        self.__cur_event_idx = self.__event_logger.log_event_start(id=self.id, event='setup' if state == Job.State.SETUP else 'working', resource='job')
+        self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 
+                                                                   'setup' if state == Job.State.SETUP else 'working', 
+                                                                   'job', self.get_current_operation(), None)
 
     def operation_completed(self):
         is_completed = yield self.operation_end_signal.get()
@@ -152,5 +152,7 @@ class Job:
             self.__cur_event_idx = -1
         else:
             self.cur_state = self.State.WAITING
-            self.__cur_event_idx = self.__event_logger.log_event_start(id=self.id, event='waiting', resource='job')
+            self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 
+                                                                       'waiting', 
+                                                                       'job', self.get_current_operation(), None)
         self.__event_queue.put(self)

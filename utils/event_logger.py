@@ -10,10 +10,16 @@ class EventLogger:
     def logs(self):
         return self.__logs
 
-    def log_event_start(self, id: int, event: str, resource: str, description: Optional[str] = None):
+    def log_event_start(self, 
+                        id: str, 
+                        event: str, 
+                        resource: str, 
+                        op_id: Optional[int] = None,
+                        description: Optional[str] = None):
         self.__logs.append({
             'id': id,
             'event': event,
+            'op_id': op_id,
             'description': description,
             'resource': resource,
             'start': self.__env.now
