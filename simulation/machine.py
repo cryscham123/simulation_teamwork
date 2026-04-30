@@ -153,6 +153,7 @@ class Machine:
         try:
             with self.__resource.request(priority=-1, preempt=preempt) as req:
                 yield req
+                self.set_busy(False)
                 self.__last_job_type = None
                 if reason == 'PM':
                     self.cur_state = Machine.State.PM

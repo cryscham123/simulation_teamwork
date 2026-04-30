@@ -157,7 +157,7 @@ class Scheduler:
             job: 매칭할 작업
         """
         job.start_qtime_chk()
-        target = yield self.__env.process(self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'FIFO')))
+        target = yield self.__env.process(self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'random')))
         self.__env.process(target.run(job))
         self.__env.process(job.operation_completed())
 
