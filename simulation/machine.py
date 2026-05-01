@@ -231,6 +231,7 @@ class Machine:
             job: 머신에서 처리할 작업
         """
         is_completed = False
+        job.prev_stocker = False
         try:
             with self.__resource.request(priority=0, preempt=False) as req:
                 yield req
