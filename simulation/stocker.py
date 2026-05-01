@@ -36,6 +36,7 @@ class Stocker():
 
     def run(self, job:Job):
         yield self.__resource.put(job)
+        job.prev_stocker = True
 
     def wait_until_machine_ready(self):
         """

@@ -156,7 +156,8 @@ class Scheduler:
         Args:
             job: 매칭할 작업
         """
-        job.start_qtime_chk()
+        if not job.prev_stocker:
+            job.start_qtime_chk()
         target = yield self.__env.process(self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'random')))
         self.__env.process(target.run(job))
         self.__env.process(job.operation_completed())
@@ -211,10 +212,8 @@ class Scheduler:
         """
         completed_cnt = 0
         completed_in_due_date = 0
-        total_qtime_violation = 0.0
         for job in self.__jobs:
-            print(f"Job ID: {job.id}\tQTime Violation: {round(job.total_qtime_over, 3)}\t완료 시간: {round(job.completed_time, 3) if job.completed_time > 0.0 else '미완료'}")
+            print(f"Job ID: {job.id}\t완료 시간: {round(job.completed_time, 3) if job.completed_time > 0.0 else '미완료'}")
             completed_cnt += int(job.completed_time > 0.0)
             completed_in_due_date += int(job.is_in_due_date())
-            total_qtime_violation += job.total_qtime_over
-        print(f"시뮬레이션 시간: {round(self.__env.now, 3)}\n총 작업 수: {len(self.__jobs)}\n완료된 작업 수: {completed_cnt}\n기한 안에 완료된 작업 수: {completed_in_due_date}\n총 QTime 위반 시간: {round(total_qtime_violation, 3)}")
+        print(f"시뮬레이션 시간: {round(self.__env.now, 3)}\n총 작업 수: {len(self.__jobs)}\n완료된 작업 수: {completed_cnt}\n기한 안에 완료된 작업 수: {completed_in_due_date}")
