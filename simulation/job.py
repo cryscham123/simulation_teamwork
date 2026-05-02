@@ -43,12 +43,11 @@ class Job:
         self.__is_over_qtime = False
         self.__qtime_process = None
         self.__cur_event_idx = -1
+        self.__qtime_event_idx = -1
         self.operation_end_signal = simpy.Store(env)
         self.cur_state = Job.State.UNRELEASED
 
-        self.__qtime_chk_start = 0.0
-        self.__qtime_over_time_start = 0.0
-        self.total_qtime_over = 0.0
+        self.prev_stocker = False
 
     def program_done(self):
         """
@@ -56,6 +55,7 @@ class Job:
         정확히 측정되지 않은 qtime 오버시간은 추가 반영 안함.
         """
         self.__event_logger.log_event_finish(self.__cur_event_idx)
+        self.__event_logger.log_event_finish(self.__qtime_event_idx)
 
     @property
     def id(self):
@@ -91,11 +91,9 @@ class Job:
         QTime 체크 프로세스
         """
         try:
-            self.__qtime_chk_start = self.__env.now
             yield self.__env.timeout(self.__qtime[self.__cur_seq])
             self.__is_over_qtime = True
-            # qtime 초과 시간 기록
-            self.__qtime_over_time_start = self.__env.now
+            self.__qtime_event_idx = self.__event_logger.log_event_start(self.id, 'qtime_over', 'job', self.get_current_operation(), None)
 
         except simpy.Interrupt:
             pass
@@ -113,7 +111,8 @@ class Job:
         if not self.__is_over_qtime:
             self.__qtime_process.interrupt()
             return
-        self.total_qtime_over += self.__env.now - self.__qtime_chk_start
+        self.__event_logger.log_event_finish(self.__qtime_event_idx)
+        self.__qtime_event_idx = -1
         self.__is_over_qtime = False
 
     def get_remain_qtime(self):

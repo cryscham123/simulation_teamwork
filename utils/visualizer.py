@@ -49,6 +49,8 @@ def create_gantt_chart(logs: List[Any],
             colors[resource] = 'rgb(255, 65, 54)'  # 빨간색
         elif resource == "PM":
             colors[resource] = 'rgb(255, 140, 0)'  # 주황색
+        elif resource == 'qtime_over':
+            colors[resource] = 'rgb(255, 0, 255)'  # 자주색
         else:
             colors[resource] = 'rgb(0, 0, 255)'
 
@@ -63,7 +65,7 @@ def create_gantt_chart(logs: List[Any],
         title=title,
     )
     jobs = df_events[df_events['resource'] == 'job']['id'].sort_values().unique()
-    target_order = ["repairing", "PM", "waiting", "setup"] + [f"working-{i}" for i in jobs]
+    target_order = ["repairing", "PM", "waiting", "setup", "qtime_over"] + [f"working-{i}" for i in jobs]
 
     fig.data = sorted(
         fig.data, 

@@ -153,6 +153,7 @@ class Machine:
         try:
             with self.__resource.request(priority=-1, preempt=preempt) as req:
                 yield req
+                self.set_busy(False)
                 self.__last_job_type = None
                 if reason == 'PM':
                     self.cur_state = Machine.State.PM
@@ -230,6 +231,7 @@ class Machine:
             job: 머신에서 처리할 작업
         """
         is_completed = False
+        job.prev_stocker = False
         try:
             with self.__resource.request(priority=0, preempt=False) as req:
                 yield req
