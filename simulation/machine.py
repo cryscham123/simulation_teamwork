@@ -1,10 +1,13 @@
 import simpy
+from math import inf
 import random
 import math
 import pandas as pd
 from typing import Dict, Any
 from utils import EventLogger
 from enum import Enum
+from .job import Job
+import os
 
 class Machine:
     class State(Enum):
@@ -14,10 +17,15 @@ class Machine:
         REPAIRING = 3
         PM = 4
 
-    def __init__(self, env: simpy.Environment, id: int, group: str,
+    class RepairStatus(Enum):
+        SUCCESS_PM = 0
+        FAILED_PM = 1
+
+    def __init__(self, env: simpy.Environment, id: str, group: str,
                  failure_info: Dict[str, Any], setup_time_info: pd.DataFrame,
-                 process_time_info: pd.DataFrame,
-                 event_logger: EventLogger):
+                 process_time_info: pd.DataFrame, pm_hazard_threshold: float,
+                 event_logger: EventLogger, event_queue: simpy.Store, machine_signal: simpy.Store,
+                 machine_store: simpy.FilterStore):
         """
         Machine 초기화
 
@@ -28,21 +36,26 @@ class Machine:
             failure_info: 고장 정보 딕셔너리
             setup_time_info: 셋업 시간 정보 DataFrame
             process_time_info: 프로세싱 시간 정보 DataFrame
+            pm_hazard_threshold: PM 고장 확률 임계값
             event_logger: 이벤트 기록 인스턴스
+            event_queue: 머신 이벤트를 기록할 queue
+            machine_signal: 머신 상태 변화 신호를 위한 store
+            machine_store: 작업 완료를 인지하기 위한 machine store
         """
         self.__env = env
         self.__id = id
         self.group = group
         self.__event_logger = event_logger
+        self.__event_queue = event_queue
 
-        # 가정: Machine은 한 번에 하나의 작업만 처리할 수 있다.
-        self.resource = simpy.PreemptiveResource(env, capacity=1)
+        self.__resource = simpy.PreemptiveResource(env, capacity=1)
 
         # 고장 관련 파라미터
         self.__base_hazard = failure_info['base_hazard']
         self.__hazard_increase_rate = failure_info['hazard_increase_rate']
         self.__repair_time = failure_info['repair_time']
         self.__pm_duration = failure_info['pm_duration']
+        self.__pm_hazard_threshold = pm_hazard_threshold
 
         # 시간 정보
         self.__setup_times = setup_time_info
@@ -51,71 +64,129 @@ class Machine:
         # 머신 상태
         self.__last_job_type = None
         self.__event_idx = -1
+        self.__repair_idx = -1
+        self.__PM_idx = -1
         self.cur_state = Machine.State.IDLE
+        self.required_state = None
         self.down_process = None
         self.pm_process = None
-        self.run_process = None
+        self.repair_process = None
+        self.machine_signal = machine_signal
+        self.machine_store = machine_store
+        self.preempt = False
 
-    def __del__(self):
+    def program_done(self):
+        """
+        소멸자가 작동 안해서 그냥 명시적으로 머신이 소멸될 때 호출하는 함수 따로 만듦
+        """
         self.__event_logger.log_event_finish(self.__event_idx)
+        self.__event_logger.log_event_finish(self.__PM_idx)
+        self.__event_logger.log_event_finish(self.__repair_idx)
 
     @property
-    def id(self) -> int:
+    def id(self) -> str:
         """머신 ID 반환"""
         return self.__id
 
-    def calculate_hazard(self):
-        """일단은 남겨 놓음. rule-based 알고리즘에 옮겨주길 바람."""
+    def __calculate_hazard(self):
+        """
+        기존 base.py에서 처리하던걸 다시 machine으로 이관.
+        csv 값을 통해 원하는 동작 처리 가능
+        """
+        if os.getenv('DOWN_ACTIVE', 'True').lower() == 'false':
+            return inf
         h0 = self.__base_hazard
         hr = self.__hazard_increase_rate
         u = random.random()
 
-        return (-h0 + math.sqrt(h0**2 - 2*hr*math.log(u))) / hr
+        if hr > 0:
+            return (-h0 + math.sqrt((h0 ** 2) - 2 * hr * math.log(u))) / hr
+        if h0 > 0:
+            return -math.log(u) / h0
+        return inf
 
-    def down(self, time_to_fail: float):
+    def down(self):
         """머신 중단 프로세스"""
         try:
-            # 머신 고장
-            yield self.__env.timeout(time_to_fail)
+            down_time = self.__calculate_hazard()
+            yield self.__env.timeout(down_time)
             if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
-                return self
-            self.cur_state = Machine.State.REPAIRING
+                return
         except simpy.Interrupt:
             # 예방 보전 성공으로 인한 인터럽트 발생
-            pass
-        return self
+            return
+        self.required_state = Machine.State.REPAIRING
+        self.__event_queue.put(self)
 
-    def PM(self, time_to_PM: float):
+    def __calculate_PM_time(self):
+        if os.getenv('PM_ACTIVE', 'True').lower() == 'false':
+            return inf
+        h0 = self.__base_hazard
+        hr = self.__hazard_increase_rate
+        thr = self.__pm_hazard_threshold
+        if hr > 0:
+            t_star = (-h0 + math.sqrt((h0 ** 2) + 2.0 * hr * thr)) / hr
+        elif h0 > 0:
+            t_star = thr / h0
+        else:
+            t_star = inf
+        return t_star
+
+    def PM(self):
         """예방 보전 프로세스"""
         try:
-            yield self.__env.timeout(time_to_PM)
+            yield self.__env.timeout(self.__calculate_PM_time())
             if self.cur_state in [Machine.State.PM, Machine.State.REPAIRING]:
-                return self
-            # 예방 보전 시작 전, 현재 작업이 있다면 완료될 때까지 대기
-            if self.cur_state != Machine.State.IDLE:
-                yield self.run_process
-            self.cur_state = Machine.State.PM
+                return
         except simpy.Interrupt:
             # 머신 고장으로 인한 인터럽트 발생
-            pass
-        return self
+            return
+        self.required_state = Machine.State.PM
+        self.__event_queue.put(self)
 
     def repair(self):
-        """머신 수리 프로세스"""
-        reason, time = ('repairing', self.__repair_time) if self.cur_state == Machine.State.REPAIRING else ('PM', self.__pm_duration)
-        idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None)
-        yield self.__env.timeout(time)
-        self.__event_logger.log_event_finish(idx)
-        # 수리시 setup 정보도 초기화
-        self.cur_state = Machine.State.IDLE
-        self.__last_job_type = None
+        """
+        머신 수리 프로세스
+        나중에 리팩토링 예정.
+        """
+        preempt, reason, time = (True, 'repairing', self.__repair_time) if self.required_state == Machine.State.REPAIRING else (False, 'PM', self.__pm_duration)
+        try:
+            with self.__resource.request(priority=-1, preempt=preempt) as req:
+                yield req
+                self.set_busy(False)
+                self.__last_job_type = None
+                if reason == 'PM':
+                    self.cur_state = Machine.State.PM
+                    self.__PM_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None, None)
+                else:
+                    self.cur_state = Machine.State.REPAIRING
+                    self.__repair_idx = self.__event_logger.log_event_start(self.__id, reason, 'machine', None, None)
+                yield self.__env.timeout(time)
+                # 수리시 setup 정보도 초기화
+                self.cur_state = Machine.State.IDLE
+                ret = self.RepairStatus.SUCCESS_PM if reason == 'PM' else None
+        except simpy.Interrupt:
+            ret = self.RepairStatus.FAILED_PM if reason == 'PM' else None
+        if reason == 'PM':
+            self.__event_logger.log_event_finish(self.__PM_idx)
+            self.__PM_idx = -1
+        else:
+            self.__event_logger.log_event_finish(self.__repair_idx)
+            self.__repair_idx = -1
+        self.required_state = Machine.State.IDLE
+        return ret
 
     def is_idle(self) -> bool:
         """
         머신이 가용 가능한 상태인지 확인.
         수리중인지 아닌지를 판별하는 용도로 사용
         """
-        return self.resource.count < self.resource.capacity
+        if self.preempt:
+            return False
+        return self.__resource.count < self.__resource.capacity
+
+    def set_busy(self, status):
+        self.preempt = status
 
     def get_setup_time(self, job_type: str) -> float:
         """
@@ -152,37 +223,48 @@ class Machine:
         ]
         return process_time_row['process_time'].iloc[0]
 
-    def setup(self, job_type: str, op_id: int, job_id: int):
+    def run(self, job):
         """
-        머신 셋업 프로세스
+        머신의 메인 프로세스
 
         Args:
-            job_type: 작업 타입
+            job: 머신에서 처리할 작업
         """
-        self.cur_state = Machine.State.SETUP
+        is_completed = False
+        job.prev_stocker = False
+        try:
+            with self.__resource.request(priority=0, preempt=False) as req:
+                yield req
+                self.set_busy(False)
+                op_id = job.get_current_operation()
+
+                self.cur_state = Machine.State.SETUP
+                job.set_state(Job.State.SETUP)
+                self.__event_idx = self.__event_logger.log_event_start(self.__id, 
+                                                                       'setup', 
+                                                                       'machine', op_id,
+                                                                       f'job: {job.id}\noperation: {op_id}')
+                yield self.__env.timeout(self.get_setup_time(job.job_type))
+                self.__last_job_type = job.job_type
+                self.__event_logger.log_event_finish(self.__event_idx)
+
+                job.interrupt_qtime()
+
+                self.cur_state = Machine.State.WORKING
+                job.set_state(Job.State.WORKING)
+                self.__event_idx = self.__event_logger.log_event_start(self.__id, 
+                                                                       'working', 
+                                                                       'machine', op_id,
+                                                                       f'job: {job.id}\noperation: {op_id}')
+                yield self.__env.timeout(self.get_process_time(op_id))
+
+                self.cur_state = Machine.State.IDLE
+                is_completed = True
+        except simpy.Interrupt:
+            pass
+        self.__event_logger.log_event_finish(self.__event_idx)
+        if job is not None:
+            job.operation_end_signal.put(is_completed)
         self.__event_idx = -1
-        try:
-            self.__event_idx = self.__event_logger.log_event_start(self.__id, 'setup', 'machine', f'job: {job_id}\noperation: {op_id}')
-            yield self.__env.timeout(self.get_setup_time(job_type))
-            self.__event_logger.log_event_finish(self.__event_idx)
-            self.__last_job_type = job_type
-        except simpy.Interrupt:
-            self.__event_logger.log_event_finish(self.__event_idx)
-
-    def work(self, op_id: int, job_id: int):
-        """
-        작업 처리 프로세스
-
-        Args:
-            op_id: 오퍼레이션 ID
-            job_id: 작업 ID
-        """
-        self.cur_state = Machine.State.WORKING
-        process_time = self.get_process_time(op_id)
-        try:
-            self.__event_idx = self.__event_logger.log_event_start(self.__id, 'working', 'machine', f'job: {job_id}\noperation: {op_id}')
-            yield self.__env.timeout(process_time)
-            self.__event_logger.log_event_finish(self.__event_idx)
-            self.cur_state = Machine.State.IDLE
-        except simpy.Interrupt:
-            self.__event_logger.log_event_finish(self.__event_idx)
+        self.machine_signal.put(self)
+        self.machine_store.put(self)
