@@ -157,6 +157,8 @@ class Scheduler:
             job: 매칭할 작업
         """
         if not job.prev_stocker:
+            # get_remain_qtime()이 참조하는 __qtime_over_time_start를 job.py가 초기화하지 않으므로 여기서 설정
+            job._Job__qtime_over_time_start = self.__env.now
             job.start_qtime_chk()
         target = yield self.__env.process(self.__match_job_machine(job, self.__machines, os.getenv('MACHINE_CHOICE', 'random')))
         self.__env.process(target.run(job))
@@ -203,7 +205,55 @@ class Scheduler:
             )
             target.set_busy(True)
             return target
-        return None
+        if choice_method == 'MIN_QTIME':
+            idle_machines = [
+                x for x in self.__machines
+                if x.group == job.get_op_group() and x.is_idle() and x.id != 'stocker'
+            ]
+            if not idle_machines:
+                return self.__stocker
+            waiting_jobs = [
+                j for j in self.__jobs
+                if j.cur_state == Job.State.WAITING and j.get_op_group() == job.get_op_group()
+            ]
+            best_job = min(waiting_jobs, key=lambda j: j.get_remain_qtime() if hasattr(j, '_Job__qtime_over_time_start') else float('inf')) if waiting_jobs else job
+            if best_job is not job:
+                return self.__stocker
+            target = idle_machines[random.randint(0, len(idle_machines) - 1)]
+            target.set_busy(True)
+            return target
+        if choice_method == 'LPT':
+            idle_machines = [
+                x for x in self.__machines
+                if x.group == job.get_op_group() and x.is_idle() and x.id != 'stocker'
+            ]
+            if not idle_machines:
+                return self.__stocker
+            waiting_jobs = [
+                j for j in self.__jobs
+                if j.cur_state == Job.State.WAITING and j.get_op_group() == job.get_op_group()
+            ]
+            ref_machine = idle_machines[0]
+            best_job = max(
+                waiting_jobs,
+                key=lambda j: ref_machine.get_process_time(j.get_current_operation())
+            ) if waiting_jobs else job
+            if best_job is not job:
+                return self.__stocker
+            target = idle_machines[random.randint(0, len(idle_machines) - 1)]
+            target.set_busy(True)
+            return target
+        if choice_method == 'SPTSSU':
+            candidates = [m for m in machines if m.group == job.get_op_group()]
+            op_id = job.get_current_operation()
+            target = min(candidates, key=lambda m:
+                m.get_setup_time(job.job_type) + m.get_process_time(op_id)
+                + 100000000 * int(m.id == 'stocker')
+                + 1000000000000000 * int(not m.is_idle())
+            )
+            target.set_busy(True)
+            return target
+        raise ValueError(f"알 수 없는 MACHINE_CHOICE 값: {choice_method}")
 
     def get_simulation_info(self):
         """
