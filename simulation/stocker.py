@@ -1,5 +1,6 @@
 from .job import Job
 import simpy
+import os
 
 class AllwaysTrueGroup():
     def __eq__(self, other):
@@ -45,8 +46,23 @@ class Stocker():
         while True:
             machine = yield self.machine_end_signal.get()
             # stocker에 작업이 있으면 꺼내고, 아니면 그냥 패스
-            if len([x for x in self.__resource.items if x.get_op_group() == machine.group]) == 0:
+            candidates = [x for x in self.__resource.items if x.get_op_group() == machine.group]
+            if len(candidates) == 0:
                 continue
-            job = yield self.__resource.get(lambda x: x.get_op_group() == machine.group)
+
+            choice_method = os.getenv('MACHINE_CHOICE', 'random')
+            if choice_method == 'QSPT':
+                # QSPT: process_time + urgency_factor * remain_qtime 이 가장 작은 job 우선
+                # remain_qtime이 작을수록(초과에 가까울수록) 점수가 낮아져 먼저 선택됨
+                urgency_factor = float(os.getenv('QTIME_URGENCY_FACTOR', '1.0'))
+                best_job = min(
+                    candidates,
+                    key=lambda j: machine.get_process_time(j.get_current_operation())
+                                  + urgency_factor * j.get_remain_qtime()
+                )
+                job = yield self.__resource.get(lambda x: x is best_job)
+            else:
+                job = yield self.__resource.get(lambda x: x.get_op_group() == machine.group)
+
             # job에 맞는 machine이 idle이 되면 다시 dispatch
             job.operation_end_signal.put(False)

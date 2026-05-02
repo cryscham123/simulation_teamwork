@@ -102,6 +102,7 @@ class Job:
         """
         QTime 체크 프로세스 시작
         """
+        self.__qtime_chk_start = self.__env.now
         self.__qtime_process = self.__env.process(self.__chk_qtime())
 
     def interrupt_qtime(self):
@@ -119,7 +120,7 @@ class Job:
         """
         남은 QTime 반환. 음수일 경우 QTime 초과 상태
         """
-        return self.__qtime[self.__cur_seq] - (self.__env.now - self.__qtime_over_time_start)
+        return self.__qtime[self.__cur_seq] - (self.__env.now - self.__qtime_chk_start)
 
     def get_current_operation(self):
         if self.cur_state in [self.State.COMPLETED, self.State.UNRELEASED]:

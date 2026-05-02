@@ -169,7 +169,7 @@ class Scheduler:
         Args:
             job: 매칭할 작업
             machines: 머신 리스트
-            choice_method: 머신 선택 방법 (예: 'random', 'FIFO', 'SPT')
+            choice_method: 머신 선택 방법 (예: 'random', 'FIFO', 'SPT', 'QSPT')
 
         Returns:
             Machine: 선택된 머신
@@ -201,6 +201,20 @@ class Scheduler:
                 + 100000000 * int(m.id == 'stocker')
                 + 1000000000000000 * int(not m.is_idle())
             )
+            target.set_busy(True)
+            return target
+        if choice_method == 'QSPT':
+            # QSPT의 job 선택 로직은 stocker.wait_until_machine_ready()에서 처리됨
+            # 여기서는 idle machine이 있으면 배정, 없으면 stocker로 보냄
+            target = [
+                x for x in self.__machines
+                if x.group == job.get_op_group()
+                and x.is_idle()
+                and x.id != 'stocker'
+            ]
+            if len(target) == 0:
+                return self.__stocker
+            target = target[random.randint(0, len(target)-1)]
             target.set_busy(True)
             return target
         return None
