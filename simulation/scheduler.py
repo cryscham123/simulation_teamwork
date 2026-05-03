@@ -5,7 +5,6 @@ from utils import EventLogger
 from typing import Dict
 from .job import Job
 from .stocker import Stocker
-import random
 
 class Scheduler:
     """시뮬레이션 환경의 스케줄러 클래스"""
@@ -165,7 +164,7 @@ class Scheduler:
 
     def __match_job_machine(self, job: Job):
         """
-        idle machine 중 하나를 random으로 선택. idle machine이 없으면 stocker 반환.
+        setup_time + process_time이 최소인 idle machine 선택. idle machine이 없으면 stocker 반환.
 
         Args:
             job: 매칭할 작업
@@ -181,7 +180,11 @@ class Scheduler:
         ]
         if not idle_machines:
             return self.__stocker
-        target = random.choice(idle_machines)
+        op_id = job.get_current_operation()
+        target = min(
+            idle_machines,
+            key=lambda m: m.get_setup_time(job.job_type) + m.get_process_time(op_id)
+        )
         target.set_busy(True)
         return target
 
