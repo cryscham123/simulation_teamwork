@@ -46,8 +46,15 @@ class Stocker():
         """
         if rule == 'random':
             return random.choice(candidates)
+        if rule == 'FIFO':
+            return candidates[0]
         if rule == 'SPT':
             return min(
+                candidates,
+                key=lambda j: machine.get_process_time(j.get_current_operation())
+            )
+        if rule == 'LPT':
+            return max(
                 candidates,
                 key=lambda j: machine.get_process_time(j.get_current_operation())
             )
