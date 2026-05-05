@@ -24,8 +24,7 @@ class Machine:
     def __init__(self, env: simpy.Environment, id: str, group: str,
                  failure_info: Dict[str, Any], setup_time_info: pd.DataFrame,
                  process_time_info: pd.DataFrame, pm_hazard_threshold: float,
-                 event_logger: EventLogger, event_queue: simpy.Store, machine_signal: simpy.Store,
-                 machine_store: simpy.FilterStore):
+                 event_logger: EventLogger, event_queue: simpy.Store, machine_signal: simpy.Store):
         """
         Machine 초기화
 
@@ -40,7 +39,6 @@ class Machine:
             event_logger: 이벤트 기록 인스턴스
             event_queue: 머신 이벤트를 기록할 queue
             machine_signal: 머신 상태 변화 신호를 위한 store
-            machine_store: 작업 완료를 인지하기 위한 machine store
         """
         self.__env = env
         self.__id = id
@@ -72,7 +70,6 @@ class Machine:
         self.pm_process = None
         self.repair_process = None
         self.machine_signal = machine_signal
-        self.machine_store = machine_store
         self.preempt = False
 
     def program_done(self):
@@ -267,4 +264,3 @@ class Machine:
             job.operation_end_signal.put(is_completed)
         self.__event_idx = -1
         self.machine_signal.put(self)
-        self.machine_store.put(self)
