@@ -13,8 +13,7 @@ class Scheduler:
                  env: simpy.Environment, 
                  data: Dict[str, pd.DataFrame], 
                  event_logger: EventLogger, 
-                 pm_hazard_threshold: float,
-                 qtime_urgency_factor: float):
+                 pm_hazard_threshold: float):
         """
         Scheduler 초기화
 
@@ -23,12 +22,9 @@ class Scheduler:
             data: 시뮬레이션에 필요한 데이터 딕셔너리
             event_logger: 이벤트 기록 인스턴스
             pm_hazard_threshold: PM 고장 확률 임계값
-            qtime_urgency_factor: QTime 긴급도 가중치
         """
         self.__env = env
-        self.__qutime_urgency_factor = qtime_urgency_factor
         self.__machines = []
-        self.machine_store = simpy.FilterStore(env, capacity=float('inf'))
         self.machine_signal = simpy.Store(env, capacity=float('inf'))
         self.machine_events = simpy.Store(env, capacity=float('inf'))
 
@@ -65,14 +61,11 @@ class Scheduler:
                 event_logger=event_logger,
                 event_queue=self.machine_events,
                 machine_signal=self.machine_signal,
-                machine_store=self.machine_store
             )
             machine.down_process = env.process(machine.down())
             machine.pm_process = env.process(machine.PM())
             self.__machines.append(machine)
-            self.machine_store.put(machine)
         self.__stocker = Stocker(env, self.machine_signal)
-        self.__machines.append(self.__stocker)
         env.process(self.__chk_machine_event())
 
         self.__jobs = []
@@ -126,7 +119,6 @@ class Scheduler:
             return
         machine.down_process = self.__env.process(machine.down())
         machine.pm_process = self.__env.process(machine.PM())
-        self.machine_store.put(machine)
         self.machine_signal.put(machine)
 
     def __chk_job_waiting(self, num_jobs: int):
@@ -176,7 +168,6 @@ class Scheduler:
             x for x in self.__machines
             if x.group == job.get_op_group()
             and x.is_idle()
-            and x.id != 'stocker'
         ]
         if not idle_machines:
             return self.__stocker

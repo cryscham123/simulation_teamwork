@@ -45,6 +45,7 @@ class Job:
         self.__cur_event_idx = -1
         self.__qtime_event_idx = -1
         self.operation_end_signal = simpy.Store(env)
+        self.__qtime_chk_start = 0.0
         self.cur_state = Job.State.UNRELEASED
 
         self.prev_stocker = False
@@ -91,6 +92,7 @@ class Job:
         QTime 체크 프로세스
         """
         try:
+            self.__qtime_chk_start = self.__env.now
             yield self.__env.timeout(self.__qtime[self.__cur_seq])
             self.__is_over_qtime = True
             self.__qtime_event_idx = self.__event_logger.log_event_start(self.id, 'qtime_over', 'job', self.get_current_operation(), None)
@@ -119,7 +121,7 @@ class Job:
         """
         남은 QTime 반환. 음수일 경우 QTime 초과 상태
         """
-        return self.__qtime[self.__cur_seq] - (self.__env.now - self.__qtime_over_time_start)
+        return self.__qtime[self.__cur_seq] - (self.__env.now - self.__qtime_chk_start)
 
     def get_current_operation(self):
         if self.cur_state in [self.State.COMPLETED, self.State.UNRELEASED]:
