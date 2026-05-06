@@ -147,9 +147,7 @@ class Scheduler:
         Args:
             job: 매칭할 작업
         """
-        if not job.prev_stocker:
-            # get_remain_qtime()이 참조하는 __qtime_over_time_start를 job.py가 초기화하지 않으므로 여기서 설정
-            job._Job__qtime_over_time_start = self.__env.now
+        if not job.prev_not_completed:
             job.start_qtime_chk()
         target = self.__match_job_machine(job)
         self.__env.process(target.run(job))

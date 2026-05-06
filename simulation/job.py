@@ -41,7 +41,6 @@ class Job:
 
         # 프로세스 상태 관리
         self.__cur_seq = 0
-        self.__is_over_qtime = False
         self.__qtime_process = None
         self.__cur_event_idx = -1
         self.__qtime_event_idx = -1
@@ -49,7 +48,7 @@ class Job:
         self.__qtime_chk_start = 0.0
         self.cur_state = Job.State.UNRELEASED
 
-        self.prev_stocker = False
+        self.prev_not_completed = False
 
     def program_done(self):
         """
@@ -88,7 +87,6 @@ class Job:
         try:
             self.__qtime_chk_start = self.__env.now
             yield self.__env.timeout(self.__qtime[self.__cur_seq])
-            self.__is_over_qtime = True
             self.__qtime_event_idx = self.__event_logger.log_event_start(self.id, 'qtime_over', 'job', self.get_current_operation(), None)
 
         except simpy.Interrupt:
@@ -104,12 +102,11 @@ class Job:
         """
         QTime 체크 프로세스 중단
         """
-        if not self.__is_over_qtime:
+        if self.__qtime_process.is_alive:
             self.__qtime_process.interrupt()
             return
         self.__event_logger.log_event_finish(self.__qtime_event_idx)
         self.__qtime_event_idx = -1
-        self.__is_over_qtime = False
 
     def get_remain_qtime(self):
         """
@@ -150,4 +147,5 @@ class Job:
             self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 
                                                                        'waiting', 
                                                                        'job', self.get_current_operation(), None)
+        self.prev_not_completed = not is_completed 
         self.__event_queue.put(self)
