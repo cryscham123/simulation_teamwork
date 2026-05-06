@@ -11,7 +11,7 @@ class Stocker():
 
     def run(self, job:Job):
         yield self.__resource.put(job)
-        job.prev_stocker = True
+        job.prev_not_completed = True
 
     def __select_job(self, candidates, machine, rule):
         """
