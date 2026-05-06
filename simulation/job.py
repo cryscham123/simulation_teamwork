@@ -7,10 +7,11 @@ from utils import EventLogger
 class Job:
     class State(Enum):
         UNRELEASED = 0
-        WAITING = 1
-        SETUP = 2
-        WORKING = 3
-        COMPLETED = 4
+        RELEASED = 1
+        WAITING = 2
+        SETUP = 3
+        WORKING = 4
+        COMPLETED = 5
 
     def __init__(self, env: simpy.Environment, job_info: Dict[str, Any],
                  op_info: pd.DataFrame, event_logger: EventLogger, event_queue: simpy.Store):
@@ -36,7 +37,7 @@ class Job:
         self.__qtime[0] = float('inf') # 첫 번째 operation에 대한 qtime은 고려하지 않는다.
         self.__op_seq = op_info[['op_id', 'op_seq']].values
         self.__op_group = op_info[['op_group', 'op_seq']].values
-        self.__completed_time = 0.0
+        self.tardiness = 0.0
 
         # 프로세스 상태 관리
         self.__cur_seq = 0
@@ -67,19 +68,12 @@ class Job:
         return self.__job_type
 
     @property
-    def completed_time(self):
-        return self.__completed_time
-
-    @property
     def cur_seq(self):
         return self.__cur_seq
 
     @property
     def priority(self):
         return self.__priority
-
-    def is_in_due_date(self):
-        return self.completed_time > 0.0 and self.__due_date > self.__completed_time
 
     def get_op_group(self):
         """
@@ -130,11 +124,11 @@ class Job:
 
     def release(self):
         yield self.__env.timeout(self.__release_time)
-        self.cur_state = self.State.WAITING
-        self.__event_queue.put(self)
+        self.cur_state = self.State.RELEASED
         self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 
                                                                    'waiting', 
                                                                    'job', self.get_current_operation(), None)
+        self.__event_queue.put(self)
 
     def set_state(self, state: State):
         self.cur_state = state
@@ -149,8 +143,8 @@ class Job:
         self.__event_logger.log_event_finish(self.__cur_event_idx)
         if self.__cur_seq >= len(self.__op_seq):
             self.cur_state = self.State.COMPLETED
-            self.__completed_time = self.__env.now
             self.__cur_event_idx = -1
+            self.tardiness = max(0, self.__env.now - self.__due_date)
         else:
             self.cur_state = self.State.WAITING
             self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 

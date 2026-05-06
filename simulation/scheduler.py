@@ -24,6 +24,7 @@ class Scheduler:
             pm_hazard_threshold: PM 고장 확률 임계값
         """
         self.__env = env
+        self.__WIP = 0
         self.__machines = []
         self.machine_signal = simpy.Store(env, capacity=float('inf'))
         self.machine_events = simpy.Store(env, capacity=float('inf'))
@@ -128,7 +129,7 @@ class Scheduler:
         terminated_jobs = 0
         while terminated_jobs < num_jobs:
             job = yield self.job_events.get()
-            # 작업 완료 시 시뮬레이션에서 제외
+            self.__WIP += (job.cur_state == Job.State.RELEASED) - (job.cur_state == Job.State.COMPLETED)
             if job.cur_state == Job.State.COMPLETED:
                 terminated_jobs += 1
                 continue
@@ -178,16 +179,3 @@ class Scheduler:
         )
         target.set_busy(True)
         return target
-
-    def get_simulation_info(self):
-        """
-        임시 함수
-        나중에 event log에서 모든 정보를 추출할 수 있도록 변경 예정
-        """
-        completed_cnt = 0
-        completed_in_due_date = 0
-        for job in self.__jobs:
-            print(f"Job ID: {job.id}\t완료 시간: {round(job.completed_time, 3) if job.completed_time > 0.0 else '미완료'}")
-            completed_cnt += int(job.completed_time > 0.0)
-            completed_in_due_date += int(job.is_in_due_date())
-        print(f"시뮬레이션 시간: {round(self.__env.now, 3)}\n총 작업 수: {len(self.__jobs)}\n완료된 작업 수: {completed_cnt}\n기한 안에 완료된 작업 수: {completed_in_due_date}")
