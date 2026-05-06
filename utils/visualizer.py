@@ -1,6 +1,6 @@
 import pandas as pd
-import plotly.figure_factory as ff
 import plotly.graph_objects as go
+import plotly.express as px
 from typing import List, Any
 
 def create_gantt_chart(logs: List[Any], 
@@ -23,6 +23,7 @@ def create_gantt_chart(logs: List[Any],
     gantt_data = []
 
     for id, events in df_events[df_events['resource'] == 'machine'].groupby('id'):
+    #for id, events in df_events.groupby('id'):
         for _, event in events.sort_values('start').iterrows():
             if event['start'] == event['finish']:
                 continue
@@ -37,47 +38,43 @@ def create_gantt_chart(logs: List[Any],
 
     df_gantt = pd.DataFrame(gantt_data)
 
-    colors = {}
-    for resource in df_gantt['Resource'].unique():
-        if resource == "waiting":
-            colors[resource] = 'rgb(220, 220, 220)'  # 밝은 회색
-        elif resource == "setup":
-            colors[resource] = 'rgb(0, 200, 83)' # 초록색
-        elif "working-" in resource:
-            colors[resource] = f'rgb(0, {200 - int(resource.split("-")[1][1:]) * 20}, 255)'  # 파란색 계열
-        elif resource == "repairing":
-            colors[resource] = 'rgb(255, 65, 54)'  # 빨간색
-        elif resource == "PM":
-            colors[resource] = 'rgb(255, 140, 0)'  # 주황색
-        elif resource == 'qtime_over':
-            colors[resource] = 'rgb(255, 0, 255)'  # 자주색
+    df_gantt['Duration'] = df_gantt['Finish'] - df_gantt['Start']
+    color_map = {}
+    for res in df_gantt['Resource'].unique():
+        if res == "waiting": color_map[res] = 'rgb(220, 220, 220)'
+        elif res == "setup": color_map[res] = 'rgb(0, 200, 83)'
+        elif res == "repairing": color_map[res] = 'rgb(255, 65, 54)'
+        elif res == "PM": color_map[res] = 'rgb(255, 140, 0)'
+        elif res == 'qtime_over': color_map[res] = 'rgb(255, 0, 255)'
+        elif "working-" in res:
+            val = int(res.split("-")[1][1:]) % 5 
+            color_map[res] = f'rgb(0, {200 - val * 30}, 255)'
         else:
-            colors[resource] = 'rgb(0, 0, 255)'
+            color_map[res] = 'rgb(0, 0, 255)'
 
-    fig = ff.create_gantt(
-        df_gantt,
-        colors=colors,
-        index_col='Resource',
-        show_colorbar=True,
-        group_tasks=True,
-        showgrid_x=True,
-        showgrid_y=True,
-        title=title,
-    )
     jobs = df_events[df_events['resource'] == 'job']['id'].sort_values().unique()
     target_order = ["repairing", "PM", "waiting", "setup", "qtime_over"] + [f"working-{i}" for i in jobs]
+    sorted_tasks = sorted(df_gantt['Task'].unique())
 
-    fig.data = sorted(
-        fig.data, 
-        key=lambda x: target_order.index(x.name) if x.name in target_order else 999
+    fig = px.bar(
+        df_gantt,
+        base="Start",
+        x="Duration",
+        y="Task",
+        color="Resource",
+        color_discrete_map=color_map,
+        orientation='h',
+        category_orders={
+            "Resource": target_order,
+            "Task": sorted_tasks
+        },
+        title=title
     )
-
     fig.update_layout(
         xaxis_title="Time",
         yaxis_title="Machine ID",
-        hovermode='closest',
-        height=max(400, len(df_gantt['Task'].unique()) * 50),
-        xaxis=dict(range=[0, max_time + 1], type='linear', dtick=5)
+        xaxis=dict(range=[0, max_time + 1], dtick=10),
+        height=max(400, len(df_gantt['Task'].unique()) * 50)
     )
-
+    fig.update_traces(width=0.3)
     return fig
