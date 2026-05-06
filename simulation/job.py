@@ -37,7 +37,6 @@ class Job:
         self.__qtime[0] = float('inf') # 첫 번째 operation에 대한 qtime은 고려하지 않는다.
         self.__op_seq = op_info[['op_id', 'op_seq']].values
         self.__op_group = op_info[['op_group', 'op_seq']].values
-        self.tardiness = 0.0
 
         # 프로세스 상태 관리
         self.__cur_seq = 0
@@ -46,7 +45,9 @@ class Job:
         self.__qtime_event_idx = -1
         self.operation_end_signal = simpy.Store(env)
         self.__qtime_chk_start = 0.0
+        self.__waited_time = 0.0
         self.cur_state = Job.State.UNRELEASED
+        self.__is_qtime_over = False
 
         self.prev_not_completed = False
 
@@ -85,12 +86,13 @@ class Job:
         QTime 체크 프로세스
         """
         try:
-            self.__qtime_chk_start = self.__env.now
-            yield self.__env.timeout(self.__qtime[self.__cur_seq])
-            self.__qtime_event_idx = self.__event_logger.log_event_start(self.id, 'qtime_over', 'job', self.get_current_operation(), None)
-
+            if not self.__is_qtime_over:
+                self.__qtime_chk_start = self.__env.now
+                yield self.__env.timeout(self.__qtime[self.__cur_seq] - self.__waited_time)
+                self.__qtime_event_idx = self.__event_logger.log_event_start(self.id, 'qtime_over', 'job', self.get_current_operation(), None)
+                self.__is_qtime_over = True
         except simpy.Interrupt:
-            pass
+            self.__waited_time = self.__env.now - self.__qtime_chk_start
 
     def start_qtime_chk(self):
         """
@@ -106,13 +108,12 @@ class Job:
             self.__qtime_process.interrupt()
             return
         self.__event_logger.log_event_finish(self.__qtime_event_idx)
-        self.__qtime_event_idx = -1
 
     def get_remain_qtime(self):
         """
         남은 QTime 반환. 음수일 경우 QTime 초과 상태
         """
-        return self.__qtime[self.__cur_seq] - (self.__env.now - self.__qtime_chk_start)
+        return (self.__qtime[self.__cur_seq] - self.__waited_time) - (self.__env.now - self.__qtime_chk_start)
 
     def get_current_operation(self):
         if self.cur_state in [self.State.COMPLETED, self.State.UNRELEASED]:
@@ -141,10 +142,12 @@ class Job:
         if self.__cur_seq >= len(self.__op_seq):
             self.cur_state = self.State.COMPLETED
             self.__cur_event_idx = -1
-            self.tardiness = max(0, self.__env.now - self.__due_date)
+            self.__qtime_event_idx = -1
         else:
             self.cur_state = self.State.WAITING
             self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 
                                                                        'waiting', 
                                                                        'job', self.get_current_operation(), None)
+        self.__is_qtime_over &= (not is_completed)
+        self.__waited_time *= int(not is_completed)
         self.__event_queue.put(self)
