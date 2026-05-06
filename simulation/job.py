@@ -147,5 +147,4 @@ class Job:
             self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 
                                                                        'waiting', 
                                                                        'job', self.get_current_operation(), None)
-        self.prev_not_completed = not is_completed 
         self.__event_queue.put(self)

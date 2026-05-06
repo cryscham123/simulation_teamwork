@@ -228,7 +228,7 @@ class Machine:
             job: 머신에서 처리할 작업
         """
         is_completed = False
-        job.prev_stocker = False
+        job.prev_not_completed = True
         try:
             with self.__resource.request(priority=0, preempt=False) as req:
                 yield req
@@ -246,6 +246,7 @@ class Machine:
                 self.__event_logger.log_event_finish(self.__event_idx)
 
                 job.interrupt_qtime()
+                job.prev_not_completed = False
 
                 self.cur_state = Machine.State.WORKING
                 job.set_state(Job.State.WORKING)
