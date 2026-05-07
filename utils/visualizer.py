@@ -27,15 +27,11 @@ def create_gantt_chart(logs: List[Any],
         for _, event in events.sort_values('start').iterrows():
             if event['start'] == event['finish']:
                 continue
-            if event['description']:
-                job_id = event['description'].split('\n')[0].split(': ')[1]
-            elif event['resource'] == 'job':
-                job_id = id
             gantt_data.append({
                 'Task': id,
                 'Start': event['start'],
                 'Finish': event['finish'],
-                'Resource': f"{event['event']}-{job_id}" if event['event'] == 'working' else event['event'],
+                'Resource': event['event'],
                 'job_op': event['op_id'] if event['op_id'] is not None else ""
             })
 
@@ -43,6 +39,7 @@ def create_gantt_chart(logs: List[Any],
 
     df_gantt['Duration'] = df_gantt['Finish'] - df_gantt['Start']
     color_map = {}
+    job_type = []
     for res in df_gantt['Resource'].unique():
         if res == "waiting": color_map[res] = 'rgb(220, 220, 220)'
         elif res == "setup": color_map[res] = 'rgb(0, 200, 83)'
@@ -50,14 +47,14 @@ def create_gantt_chart(logs: List[Any],
         elif res == "PM": color_map[res] = 'rgb(255, 140, 0)'
         elif res == 'qtime_over': color_map[res] = 'rgb(255, 0, 255)'
         elif "working-" in res:
-            val = int(res.split("-")[1][1:]) % 5 
-            color_map[res] = f'rgb(0, {200 - val * 30}, 255)'
+            val = res.split("-")[1]
+            job_type.append(val)
+            color_map[res] = f'rgb(0, {200 - len(job_type) * 30}, 255)'
         else:
             color_map[res] = 'rgb(0, 0, 255)'
 
-    jobs = df_events[df_events['resource'] == 'job']['id'].sort_values().unique()
-    target_order = ["qtime_over", "repairing", "PM", "waiting", "setup"] + [f"working-{i}" for i in jobs]
-    sorted_tasks = sorted(df_gantt['Task'].unique())
+    target_order = ["qtime_over", "repairing", "PM", "waiting", "setup"] + [f"working-{i}" for i in sorted(job_type)]
+    sorted_tasks = sorted(df_gantt['Task'].unique(), key=lambda x: int(x[1:]))
 
     fig = px.bar(
         df_gantt,
@@ -78,9 +75,9 @@ def create_gantt_chart(logs: List[Any],
     fig.update_layout(
         xaxis_title="Time",
         yaxis_title="Machine ID",
-        xaxis=dict(range=[0, max_time + 1], dtick=10),
+        xaxis=dict(range=[0, 100], dtick=10),
         height=max(400, len(df_gantt['Task'].unique()) * 50)
     )
-    fig.update_traces(width=0.3)
-    fig.update_traces(width=0.6, selector=dict(name="qtime_over"))
+    fig.update_traces(width=0.5)
+    fig.update_traces(width=0.7, selector=dict(name="qtime_over"))
     return fig

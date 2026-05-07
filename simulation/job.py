@@ -146,7 +146,7 @@ class Job:
         else:
             self.cur_state = self.State.WAITING
             self.__cur_event_idx = self.__event_logger.log_event_start(self.id, 
-                                                                       'waiting', 
+                                                                       f'waiting-{self.__job_type}', 
                                                                        'job', self.get_current_operation(), None)
         self.__is_qtime_over &= (not is_completed)
         self.__waited_time *= int(not is_completed)
