@@ -75,9 +75,9 @@ def create_gantt_chart(logs: List[Any],
     fig.update_layout(
         xaxis_title="Time",
         yaxis_title="Machine ID",
-        xaxis=dict(range=[0, max_time + 1], dtick=10),
+        xaxis=dict(range=[0, 100], dtick=10),
         height=max(400, len(df_gantt['Task'].unique()) * 50)
     )
-    fig.update_traces(width=0.3)
-    fig.update_traces(width=0.6, selector=dict(name="qtime_over"))
+    fig.update_traces(width=0.5)
+    fig.update_traces(width=0.7, selector=dict(name="qtime_over"))
     return fig
