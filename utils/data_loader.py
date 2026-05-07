@@ -29,4 +29,12 @@ class DataLoader:
         data['operations'] = pd.read_csv(os.path.join(self.base_data_path, 'operations.csv'))
         data['setup_times'] = pd.read_csv(os.path.join(self.base_data_path, 'setup_times.csv'))
 
+        DOWN_TIME_UNIT = os.getenv('DOWN_TIME_UNIT', 'M')
+        time_constants = {
+            'M': 1,
+            'H': 60,
+            'D': 60 * 24
+        }
+        data['machine_failure'][['base_hazard', 'hazard_increase_rate']] = data['machine_failure'][['base_hazard', 'hazard_increase_rate']].apply(lambda x: x / time_constants[DOWN_TIME_UNIT])
+
         return data
