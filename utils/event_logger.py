@@ -1,5 +1,6 @@
 from typing import Optional
 import simpy
+import os
 
 class EventLogger:
     def __init__(self, env: simpy.Environment):
@@ -8,7 +9,20 @@ class EventLogger:
 
     @property
     def logs(self):
-        return self.__logs
+        TIME_UNIT = os.getenv('TIME_UNIT', 'M')
+        time_constants = {
+            'M': 1,
+            'H': 60,
+            'D': 60 * 24
+        }
+        return [
+            {
+                **log,
+                'start': log['start'] / time_constants[TIME_UNIT],
+                'finish': log['finish'] / time_constants[TIME_UNIT] if 'finish' in log else None
+            }
+            for log in self.__logs
+        ]
 
     def log_event_start(self, 
                         id: str, 
