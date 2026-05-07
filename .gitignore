@@ -8,3 +8,4 @@
 .claude/
 *_files
 *.html
+!final_report.qmd
