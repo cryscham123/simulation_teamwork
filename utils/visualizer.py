@@ -55,9 +55,10 @@ def create_gantt_chart(logs: List[Any],
         else:
             color_map[res] = 'rgb(0, 0, 255)'
 
-    jobs = df_events[df_events['resource'] == 'job']['id'].sort_values().unique()
+    jobs = df_events[df_events['resource'] == 'job']['id'].unique()
+    jobs = sorted(jobs, key=lambda x: int(x[1:]))
     target_order = ["qtime_over", "repairing", "PM", "waiting", "setup"] + [f"working-{i}" for i in jobs]
-    sorted_tasks = sorted(df_gantt['Task'].unique())
+    sorted_tasks = sorted(df_gantt['Task'].unique(), key=lambda x: int(x[1:]))
 
     fig = px.bar(
         df_gantt,
