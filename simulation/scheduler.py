@@ -76,7 +76,7 @@ class Scheduler:
             machine.down_process = env.process(machine.down())
             machine.pm_process = env.process(machine.PM())
             self.__machines.append(machine)
-        self.__stocker = Stocker(env, self.machine_signal)
+        self.__stocker = Stocker(env, self.machine_signal, op_machine=op_machine)
         env.process(self.__chk_machine_event())
 
         self.__jobs = []
