@@ -14,7 +14,7 @@ class Scheduler:
                  data: Dict[str, pd.DataFrame],
                  event_logger: EventLogger,
                  pm_hazard_threshold: float,
-                 job_priority: Optional[List[str]] = None,
+                 operation_priority: Optional[Dict[str, float]] = None,
                  op_machine: Optional[Dict[str, str]] = None,
                  pm_thresholds: Optional[Dict[str, float]] = None):
         """
@@ -25,7 +25,7 @@ class Scheduler:
             data: 시뮬레이션에 필요한 데이터 딕셔너리
             event_logger: 이벤트 기록 인스턴스
             pm_hazard_threshold: PM 고장 확률 임계값
-            job_priority: GA가 정한 job 투입 우선순위. None이면 데이터 순서.
+            operation_priority: GA가 정한 작업 우선순위. op_id → float (0-1). None이면 룰 기반 dispatching.
             op_machine: GA가 정한 op→머신 할당. None이면 룰 기반 매칭.
             pm_thresholds: GA가 정한 머신별 PM threshold. None이면 글로벌 값 사용.
         """
@@ -76,17 +76,14 @@ class Scheduler:
             machine.down_process = env.process(machine.down())
             machine.pm_process = env.process(machine.PM())
             self.__machines.append(machine)
-        self.__stocker = Stocker(env, self.machine_signal, op_machine=op_machine)
+        self.__stocker = Stocker(env, self.machine_signal, operation_priority=operation_priority)
         env.process(self.__chk_machine_event())
 
         self.__jobs = []
         self.job_events = simpy.Store(env, capacity=float('inf'))
 
-        # GA 모드: 우선순위 순서로 job process 등록 (SimPy FIFO 활용)
-        if job_priority is not None:
-            jobs_df = data['jobs'].set_index('job_id').loc[job_priority].reset_index()
-        else:
-            jobs_df = data['jobs']
+        # 작업 프로세스 등록
+        jobs_df = data['jobs']
 
         for _, job_info in jobs_df.iterrows():
             # 해당 작업의 operation 정보 가져오기

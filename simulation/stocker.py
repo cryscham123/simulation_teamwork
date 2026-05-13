@@ -2,12 +2,13 @@ from .job import Job
 import simpy
 import os
 import random
+from typing import Optional, Dict
 
 class Stocker():
-    def __init__(self, env, signal, op_machine=None):
+    def __init__(self, env, signal, operation_priority: Optional[Dict[str, float]] = None):
         self.__resource = simpy.FilterStore(env, capacity=float('inf'))
         self.machine_end_signal = signal
-        self.__op_machine = op_machine
+        self.__operation_priority = operation_priority
         env.process(self.wait_until_machine_ready())
 
     def run(self, job:Job):
@@ -40,6 +41,11 @@ class Stocker():
                 key=lambda j: machine.get_setup_time(j.job_type)
                 + machine.get_process_time(j.get_current_operation())
             )
+        if rule == 'GA':
+            return max(
+                candidates,
+                key=lambda j: self.__operation_priority.get(j.get_current_operation(), 0)
+            )
         raise ValueError(f"알 수 없는 JOB_RULE 값: {rule}")
 
     def wait_until_machine_ready(self):
@@ -48,18 +54,10 @@ class Stocker():
         """
         while True:
             machine = yield self.machine_end_signal.get()
-            if self.__op_machine is not None:
-                # GA 모드: GA가 이 머신에 배정한 job들만 후보
-                candidates = [
-                    x for x in self.__resource.items
-                    if self.__op_machine[x.get_current_operation()] == machine.id
-                ]
-            else:
-                # 룰 기반: 같은 group이면 후보
-                candidates = [
-                    x for x in self.__resource.items
-                    if x.get_op_group() == machine.group
-                ]
+            candidates = [
+                x for x in self.__resource.items
+                if x.get_op_group() == machine.group
+            ]
             if len(candidates) == 0:
                 continue
             rule = os.getenv('JOB_RULE', 'random')

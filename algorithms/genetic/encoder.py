@@ -33,8 +33,10 @@ def encode(data: Dict[str, pd.DataFrame]) -> EncodedData:
     """시뮬레이션 데이터(DataFrame들)를 GA가 사용할 인덱스 테이블로 변환.
 
     GA 시작 시 1번 호출 후 모든 세대에서 재사용.
+    job_seq는 제거되고, operation_priority가 유전자로 사용됨.
     """
-    # csv 등장 순서를 그대로 사용 → 결정론적
+    # 주의: job_index_table은 더 이상 사용되지 않음 (job_seq 제거됨)
+    # 하지만 operation_index_table 생성을 위해 필요
     job_index_table = data['jobs']['job_id'].tolist()
     machine_index_table = data['machines']['machine_id'].tolist()
 
@@ -42,7 +44,7 @@ def encode(data: Dict[str, pd.DataFrame]) -> EncodedData:
     ops_df = data['operations']
     operation_index_table = []
     for job_id in job_index_table:
-        job_ops = ops_df[ops_df['job_id'] == job_id].sort_values('op_seq')
+        job_ops = ops_df[ops_df['job_id'] == job_id].sort_values(by='op_seq')
         operation_index_table.extend(job_ops['op_id'].tolist())
 
     # op_id별 가능한 머신 리스트 (DataFrame 한번에 dict으로 변환 → 빠름)

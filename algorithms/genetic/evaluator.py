@@ -37,7 +37,7 @@ class Evaluator:
             data=self.data,
             event_logger=event_logger,
             pm_hazard_threshold=0.0,  # GA에선 pm_thresholds가 우선이라 안 쓰임 값을 넘기기는 해야해서 임의로
-            job_priority=sim_input.job_priority,
+            operation_priority=sim_input.operation_priority,
             op_machine=sim_input.op_machine,
             pm_thresholds=sim_input.pm_thresholds,
         )
