@@ -1,3 +1,0 @@
-"""
-Rule-based Algorithm Module
-"""
