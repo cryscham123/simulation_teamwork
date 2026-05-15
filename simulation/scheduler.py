@@ -2,18 +2,21 @@ import simpy
 import pandas as pd
 from .machine import Machine
 from utils import EventLogger
-from typing import Dict
+from typing import Dict, List, Optional
 from .job import Job
 from .stocker import Stocker
 
 class Scheduler:
     """시뮬레이션 환경의 스케줄러 클래스"""
 
-    def __init__(self, 
-                 env: simpy.Environment, 
-                 data: Dict[str, pd.DataFrame], 
-                 event_logger: EventLogger, 
-                 pm_hazard_threshold: float):
+    def __init__(self,
+                 env: simpy.Environment,
+                 data: Dict[str, pd.DataFrame],
+                 event_logger: EventLogger,
+                 pm_hazard_threshold: float,
+                 job_priority: Optional[List[str]] = None,
+                 op_machine: Optional[Dict[str, str]] = None,
+                 pm_thresholds: Optional[Dict[str, float]] = None):
         """
         Scheduler 초기화
 
@@ -22,8 +25,12 @@ class Scheduler:
             data: 시뮬레이션에 필요한 데이터 딕셔너리
             event_logger: 이벤트 기록 인스턴스
             pm_hazard_threshold: PM 고장 확률 임계값
+            job_priority: GA가 정한 job 투입 우선순위. None이면 데이터 순서.
+            op_machine: GA가 정한 op→머신 할당. None이면 룰 기반 매칭.
+            pm_thresholds: GA가 정한 머신별 PM threshold. None이면 글로벌 값 사용.
         """
         self.__env = env
+        self.__op_machine = op_machine
         self.__WIP = 0
         self.__machines = []
         self.machine_signal = simpy.Store(env, capacity=float('inf'))
@@ -51,6 +58,9 @@ class Scheduler:
                 op_machine_df['machine_id'] == machine_id
             ]
 
+            machine_threshold = (
+                pm_thresholds[machine_id] if pm_thresholds is not None else pm_hazard_threshold
+            )
             machine = Machine(
                 env=env,
                 id=machine_id,
@@ -58,7 +68,7 @@ class Scheduler:
                 failure_info=failure_info,
                 setup_time_info=setup_time_info,
                 process_time_info=process_time_info,
-                pm_hazard_threshold=pm_hazard_threshold,
+                pm_hazard_threshold=machine_threshold,
                 event_logger=event_logger,
                 event_queue=self.machine_events,
                 machine_signal=self.machine_signal,
@@ -66,12 +76,19 @@ class Scheduler:
             machine.down_process = env.process(machine.down())
             machine.pm_process = env.process(machine.PM())
             self.__machines.append(machine)
-        self.__stocker = Stocker(env, self.machine_signal)
+        self.__stocker = Stocker(env, self.machine_signal, op_machine=op_machine, job_priority=job_priority)
         env.process(self.__chk_machine_event())
 
         self.__jobs = []
         self.job_events = simpy.Store(env, capacity=float('inf'))
-        for _, job_info in data['jobs'].iterrows():
+
+        # GA 모드: 우선순위 순서로 job process 등록 (SimPy FIFO 활용)
+        if job_priority is not None:
+            jobs_df = data['jobs'].set_index('job_id').loc[job_priority].reset_index()
+        else:
+            jobs_df = data['jobs']
+
+        for _, job_info in jobs_df.iterrows():
             # 해당 작업의 operation 정보 가져오기
             job_operations = data['operations'].loc[
                 data['operations']['job_id'] == job_info['job_id'],
@@ -155,7 +172,8 @@ class Scheduler:
 
     def __match_job_machine(self, job: Job):
         """
-        setup_time + process_time이 최소인 idle machine 선택. idle machine이 없으면 stocker 반환.
+        머신 매칭. GA 모드면 GA가 정한 머신만 후보로, 아니면 setup+process 최소 idle 머신 선택.
+        idle 후보가 없으면 stocker 반환.
 
         Args:
             job: 매칭할 작업
@@ -163,17 +181,28 @@ class Scheduler:
         Returns:
             Machine 또는 Stocker
         """
-        idle_machines = [
-            x for x in self.__machines
-            if x.group == job.get_op_group()
-            and x.is_idle()
-        ]
-        if not idle_machines:
-            return self.__stocker
         op_id = job.get_current_operation()
-        target = min(
-            idle_machines,
-            key=lambda m: m.get_setup_time(job.job_type) + m.get_process_time(op_id)
-        )
+
+        if self.__op_machine is not None:
+            # GA 모드: GA가 정한 머신만 후보. idle이 아니면 대기.
+            assigned_id = self.__op_machine[op_id]
+            candidates = [m for m in self.__machines if m.id == assigned_id and m.is_idle()]
+            if not candidates:
+                return self.__stocker
+            target = candidates[0]
+        else:
+            # 기존 룰 기반
+            idle_machines = [
+                x for x in self.__machines
+                if x.group == job.get_op_group()
+                and x.is_idle()
+            ]
+            if not idle_machines:
+                return self.__stocker
+            target = min(
+                idle_machines,
+                key=lambda m: m.get_setup_time(job.job_type) + m.get_process_time(op_id)
+            )
+
         target.set_busy(True)
         return target
